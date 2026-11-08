@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Virtue
+Comment=Windows on your Linux desktop
+Exec=virtue
+Icon=virtue
+Terminal=false
+Categories=System;Emulator;
+StartupNotify=true
+

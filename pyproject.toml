@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=75,<81", "wheel>=0.45,<1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "virtue-desktop"
+version = "0.1.0"
+description = "A Linux-first Windows desktop companion for QEMU/KVM"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = ["PySide6-Essentials==6.8.3"]
+classifiers = ["Operating System :: POSIX :: Linux", "Programming Language :: Python :: 3"]
+
+[project.optional-dependencies]
+test = ["pytest==8.3.5", "build==1.2.2.post1"]
+
+[project.scripts]
+virtue = "virtue.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+

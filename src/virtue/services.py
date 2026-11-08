@@ -1,0 +1,263 @@
+"""Application actions shared by the Qt desktop and command line."""
+from __future__ import annotations
+
+from dataclasses import replace
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import threading
+import time
+
+from .backup import export_backup, import_backup
+from .domain import VMConfig, ValidationError
+from .store import VMStore, atomic_json
+
+
+class VMService:
+    def __init__(self, store: VMStore | None = None, backend=None, host=None):
+        self.store = store or VMStore()
+        self._host_report = host
+        self._host_override = host is not None
+        self._host_lock = threading.Lock()
+        if backend is None:
+            from .backends.linux import LinuxBackend
+            backend = LinuxBackend(self.store.root, host)
+        self.backend = backend
+
+    @property
+    def host(self):
+        # Native dependency probes run in the UI's worker, after its window opens.
+        with self._host_lock:
+            if self._host_report is None:
+                from .host import detect_host
+                self._host_report = detect_host()
+                self.backend.host = self._host_report
+            return self._host_report
+
+    def host_report(self) -> dict:
+        if not self._host_override:
+            from .host import detect_host
+            with self._host_lock:
+                self._host_report = detect_host()
+                self.backend.host = self._host_report
+        report = self.host.to_dict()
+        report["storage_root"] = str(self.store.root)
+        report["configuration_errors"] = self.store.errors.copy()
+        return report
+
+    def _require_stopped(self, config: VMConfig) -> None:
+        state = self.backend.status(config.id).get("state", "error")
+        if state != "stopped":
+            raise ValidationError("Shut down Windows completely before changing disks, firmware, or VM settings. "
+                                  f"Current state: {state}.")
+
+    def _validate_resources(self, config: VMConfig, *, starting: bool = False) -> None:
+        other_memory = 0
+        if starting:
+            for other in self.store.list():
+                if other.id != config.id and self.backend.status(other.id).get("state") in {"running", "paused", "starting"}:
+                    other_memory += other.memory_mib
+        config.validate(host_memory_mib=self.host.memory_mib, host_cpus=self.host.cpus,
+                        check_media=True, other_memory_mib=other_memory)
+
+    def _view(self, config: VMConfig) -> dict:
+        result = config.to_dict()
+        status = self.backend.status(config.id)
+        if "graphics" in status:
+            status["active_graphics"] = status.pop("graphics")
+        result.update(status)
+        disk = self.store.directory(config.id) / "disk.qcow2"
+        if disk.exists():
+            stat = disk.stat()
+            result["storage_bytes"] = getattr(stat, "st_blocks", 0) * 512 or stat.st_size
+        else:
+            result["storage_bytes"] = 0
+        report = self.store.directory(config.id) / "gpu-report.json"
+        result["gpu_verification"] = {"state": "unverified", "reasons": ["No Windows graphics evidence has been imported."]}
+        if report.exists() and not report.is_symlink() and report.stat().st_size <= 2 * 1024 * 1024:
+            try:
+                result["gpu_verification"] = json.loads(report.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                pass
+        return result
+
+    def list_vms(self) -> list[dict]:
+        with self.store.transaction():
+            return [self._view(config) for config in self.store.list()]
+
+    def create_vm(self, options: dict) -> dict:
+        with self.store.transaction():
+            config = VMConfig.new(options)
+            self._validate_resources(config)
+            self.backend.create(config)
+            self.store.save(config)
+            return self._view(config)
+
+    def update_vm(self, vm_id: str, options: dict) -> dict:
+        allowed = {"name", "memory_mib", "cpus", "disk_gib", "installed", "iso_path",
+                   "drivers_iso_path", "storage_bus", "virtio_network", "hyperv"}
+        if set(options) - allowed:
+            raise ValidationError("These settings require the dedicated graphics or storage workflow.")
+        with self.store.transaction():
+            current = self.store.load(vm_id)
+            self._require_stopped(current)
+            config = replace(current, **options)
+            self._validate_resources(config)
+            if config.disk_gib < current.disk_gib:
+                raise ValidationError("Disks can be expanded but never shrunk.")
+            if config.disk_gib > current.disk_gib:
+                self.backend.expand_disk(current, config.disk_gib)
+            self.store.save(config)
+            return self._view(config)
+
+    def start_vm(self, vm_id: str, safe_graphics: bool = False):
+        with self.store.transaction():
+            config = self.store.load(vm_id)
+            self._validate_resources(config, starting=True)
+            self._check_standalone_disk(self.store.directory(vm_id) / "disk.qcow2")
+            return self.backend.start(config, safe_graphics=safe_graphics)
+
+    def _lifecycle(self, vm_id: str, operation: str):
+        with self.store.transaction():
+            self.store.load(vm_id)
+            return getattr(self.backend, operation)(vm_id)
+
+    def shutdown_vm(self, vm_id: str):
+        return self._lifecycle(vm_id, "shutdown")
+
+    def restart_vm(self, vm_id: str):
+        return self._lifecycle(vm_id, "restart")
+
+    def pause_vm(self, vm_id: str):
+        return self._lifecycle(vm_id, "pause")
+
+    def resume_vm(self, vm_id: str):
+        return self._lifecycle(vm_id, "resume")
+
+    def force_stop_vm(self, vm_id: str):
+        return self._lifecycle(vm_id, "force_stop")
+
+    def delete_vm(self, vm_id: str):
+        with self.store.transaction():
+            config = self.store.load(vm_id)
+            self._require_stopped(config)
+            self.backend.delete(config)
+
+    def snapshot_vm(self, vm_id: str, name: str):
+        with self.store.transaction():
+            config = self.store.load(vm_id)
+            self._require_stopped(config)
+            return self.backend.snapshot(config, name)
+
+    def list_snapshots(self, vm_id: str):
+        with self.store.transaction():
+            return self.backend.list_snapshots(self.store.load(vm_id))
+
+    def restore_vm(self, vm_id: str, name: str):
+        with self.store.transaction():
+            config = self.store.load(vm_id)
+            self._require_stopped(config)
+            # Backend validates snapshot name before opening anything; validate here too.
+            import re
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}", name):
+                raise ValidationError("Invalid snapshot name.")
+            self.backend.restore_snapshot(config, name)
+            report = self.store.directory(vm_id) / "gpu-report.json"
+            report.unlink(missing_ok=True)
+
+    def expand_vm(self, vm_id: str, size: int):
+        return self.update_vm(vm_id, {"disk_gib": size})
+
+    def export_vm(self, vm_id: str, path: str):
+        with self.store.transaction():
+            config = self.store.load(vm_id)
+            self._require_stopped(config)
+            self.backend.prepare_offline(config)
+            export_backup(self.store.directory(vm_id), Path(path))
+
+    def import_vm(self, path: str):
+        with self.store.transaction():
+            config = import_backup(Path(path), self.store.root)
+            # qemu-img info refuses backing-file references before any imported disk is booted.
+            try:
+                self._check_standalone_disk(self.store.directory(config.id) / "disk.qcow2")
+            except Exception:
+                import shutil
+                shutil.rmtree(self.store.directory(config.id))
+                raise
+            return self._view(config)
+
+    def _check_standalone_disk(self, disk: Path):
+        from .storage import validate_qcow2_header
+        validate_qcow2_header(disk)
+        qemu_img = getattr(self.host, "qemu_img", "")
+        if not qemu_img:
+            raise ValidationError("Install qemu-img before importing a VM backup.")
+        result = subprocess.run([qemu_img, "info", "--output=json", str(disk)], capture_output=True,
+                                text=True, timeout=30, check=True)
+        info = json.loads(result.stdout)
+        if info.get("format") != "qcow2" or info.get("backing-filename") or info.get("full-backing-filename"):
+            raise ValidationError("Only standalone QCOW2 disks may be imported.")
+        specific = info.get("format-specific", {}).get("data", {})
+        if specific.get("data-file") or specific.get("data-file-raw"):
+            raise ValidationError("QCOW2 external data files are not allowed.")
+
+    def enable_yttrium(self, vm_id: str, consent: bool):
+        if consent is not True:
+            raise ValidationError("Explicit consent to experimental guest graphics is required.")
+        with self.store.transaction():
+            config = self.store.load(vm_id)
+            self._require_stopped(config)
+            if not getattr(self.host, "yttrium_ready", False):
+                raise ValidationError("The compatible Yttrium host stack is unavailable. Open host diagnostics.")
+            name = "before-yttrium-" + str(time.time_ns())
+            result = self.backend.snapshot(config, name)
+            self.store.save(replace(config, graphics="yttrium", graphics_consent=True, secure_boot=False))
+            (self.store.directory(vm_id) / "gpu-report.json").unlink(missing_ok=True)
+            return result
+
+    def disable_yttrium(self, vm_id: str):
+        with self.store.transaction():
+            config = self.store.load(vm_id)
+            self._require_stopped(config)
+            # Secure Boot remains as configured in NVRAM; snapshot restore is the full rollback.
+            self.store.save(replace(config, graphics="safe"))
+            (self.store.directory(vm_id) / "gpu-report.json").unlink(missing_ok=True)
+
+    def import_gpu_report(self, vm_id: str, path: str):
+        from .graphics import classify_guest_report
+        with self.store.transaction():
+            self.store.load(vm_id)
+            source = Path(path)
+            if source.stat().st_size > 2 * 1024 * 1024:
+                raise ValidationError("Graphics report exceeds the 2 MiB limit.")
+            report = json.loads(source.read_text(encoding="utf-8-sig"))
+            result = classify_guest_report(report)
+            result["imported_at"] = time.time()
+            result["source"] = source.name
+            result["historical"] = True
+            atomic_json(self.store.directory(vm_id) / "gpu-report.json", result)
+            return result
+
+    def open_vm_folder(self, vm_id: str):
+        with self.store.transaction():
+            self.store.load(vm_id)
+            directory = self.store.directory(vm_id)
+        if sys.platform.startswith("linux"):
+            subprocess.Popen(["xdg-open", str(directory)], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif os.name == "nt":
+            os.startfile(directory)
+
+    def read_log(self, vm_id: str) -> str:
+        directory = self.store.directory(vm_id)
+        output = []
+        for name in ("qemu.log", "swtpm.log"):
+            path = directory / name
+            if path.is_file() and not path.is_symlink():
+                with path.open("rb") as stream:
+                    stream.seek(max(0, path.stat().st_size - 32768))
+                    output.append(name + "\n" + stream.read().decode("utf-8", errors="replace"))
+        return "\n\n".join(output) or "No VM logs yet."
