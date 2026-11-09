@@ -42,6 +42,8 @@ QGroupBox { border: 1px solid #30425a; border-radius: 8px; margin-top: 12px; pad
 QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }
 QProgressBar { border: none; border-radius: 3px; background: #223144; max-height: 5px; }
 QProgressBar::chunk { background: #64dcc1; border-radius: 3px; }
+QProgressBar#setupProgress { min-height: 8px; max-height: 8px; }
+QProgressBar#setupProgress[attention="true"]::chunk { background: #ffc08c; }
 QStatusBar { color: #9daec2; background: #101723; }
 QToolTip { color: #ecf5ff; background: #263b50; border: 1px solid #526881; padding: 6px; }
 """

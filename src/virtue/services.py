@@ -124,7 +124,7 @@ class VMService:
             except (ValueError, TypeError, KeyError):
                 verification = {"state": "invalid"}
             if verification["state"] != "hardware_rendering_observed":
-                progress = {"state": "error", "message": "The required accelerated graphics check did not pass."}
+                progress.update(state="error", message="The required accelerated graphics check did not pass.")
             else:
                 atomic_json(directory / "gpu-report.json", verification)
                 config = replace(config, installed=True, iso_path="")

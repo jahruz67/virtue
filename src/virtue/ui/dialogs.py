@@ -231,7 +231,7 @@ def diagnostics_html(host, vms):
         color = "#77e0c6" if check.get("ok") else "#ffc08c"
         requirement = "required" if check.get("required") else "information"
         parts.append(f"<p><b style='color:{color}'>{'PASS' if check.get('ok') else 'CHECK'} · {esc(check.get('name', 'Dependency'))}</b> ({requirement})<br>{esc(check.get('detail', ''))}</p>")
-    parts.append("<h2>Yttrium graphics</h2><p>Automatic Windows setup installs the graphics driver and records a hardware rendering check before reporting completion. Host prerequisites do not prove guest acceleration.</p>")
+    parts.append("<h2>Yttrium graphics (required)</h2><p>Yttrium graphics and its host prerequisites are required for Windows setup. Automatic Windows setup installs the graphics driver and records a hardware rendering check before reporting completion. Host prerequisites do not prove guest acceleration.</p>")
     parts.append(f"<p>Host stack: {'prerequisites detected' if host.get('yttrium_ready') else 'not ready or not verified'}</p>")
     for gpu in host.get("gpus", []):
         if isinstance(gpu, dict):

@@ -265,11 +265,13 @@ class MainWindow(QMainWindow):
             description += "  ·  Compatible display (safe launch)"
         else:
             description += "  ·  Yttrium graphics" if active_graphics == "yttrium" else "  ·  Compatible display"
-        if not vm.get("installed", False):
+        if not vm.get("installed", False) and not vm.get("auto_setup"):
             description += "  ·  Installation in progress"
         content.addWidget(label(description, "muted", True))
         setup = vm.get("setup", {})
-        if setup:
+        if vm.get("auto_setup"):
+            content.addWidget(self.setup_indicator(vm))
+        elif setup:
             content.addWidget(label(str(setup.get("message", "Installing Windows automatically…")), "muted", True))
         if vm.get("error"):
             error = label(str(vm["error"]), wrap=True)
@@ -277,13 +279,17 @@ class MainWindow(QMainWindow):
             content.addWidget(error)
         row.addLayout(content, 1)
         actions = QVBoxLayout()
+        setup_pending = bool(vm.get("auto_setup")) and not vm.get("installed", False)
         launch = QPushButton("Resume Windows" if state == "paused" else "Launch Windows")
         launch.setObjectName("primary")
-        launch.setEnabled(state == "paused" or (state == "stopped" and not self.vm_active(vm) and bool(self.host.get("ready"))))
+        launch.setEnabled(state == "paused" or (not setup_pending and state == "stopped" and not self.vm_active(vm) and bool(self.host.get("ready"))))
         launch.clicked.connect(lambda: self.resume_vm(vm) if state == "paused" else self.start_vm(vm))
-        launch.setToolTip("Open the QEMU desktop window. A running VM already has its own display window." if state == "running" else "Boot your Windows environment")
+        if setup_pending and state != "paused":
+            launch.setToolTip("Windows installs automatically. Launch is available after setup completes. If installation stops, use Retry automatic setup.")
+        else:
+            launch.setToolTip("Open the QEMU desktop window. A running VM already has its own display window." if state == "running" else "Boot your Windows environment")
         actions.addWidget(launch)
-        if setup.get("state") == "error":
+        if setup.get("state") == "error" or (setup_pending and state == "stopped" and not self.vm_active(vm)):
             retry = QPushButton("Retry automatic setup")
             retry.clicked.connect(lambda: self._perform("Retrying automatic Windows setup…", lambda: self.service.retry_setup(vm["id"], self.tasks.progress.emit)))
             actions.addWidget(retry)
@@ -292,6 +298,54 @@ class MainWindow(QMainWindow):
         actions.addWidget(more)
         row.addLayout(actions)
         return card
+
+    def setup_indicator(self, vm):
+        stages = ("Installing Windows", "Installing integration drivers",
+                  "Installing Yttrium and Vulkan", "Checking accelerated graphics")
+        setup = vm.get("setup", {})
+        phase = setup.get("phase", 0)
+        if type(phase) is not int or not 0 <= phase < len(stages):
+            phase = 0
+        complete = bool(vm.get("installed"))
+        failed = setup.get("state") == "error"
+        paused = vm.get("state") == "paused"
+        stopped = not self.vm_active(vm)
+        attention = not complete and (failed or paused or stopped)
+        title = f"Step {phase + 1} of {len(stages)} · {stages[phase]}"
+        message = str(setup.get("message") or "Windows Setup is running. Driver installation follows automatically; Windows may restart several times.")
+        if complete:
+            title = "Setup complete · All 4 stages finished"
+            message = "Windows and accelerated graphics are ready."
+        elif failed:
+            title = "Setup needs attention"
+        elif paused or stopped:
+            title = "Setup paused" if paused else "Setup stopped"
+            instruction = "Resume Windows to continue." if paused else "Use Retry automatic setup to continue."
+            message = f"{instruction}\nLast update: {message}"
+
+        indicator = QWidget()
+        layout = QVBoxLayout(indicator)
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(6)
+        heading = label(title, "muted", True)
+        if complete or attention:
+            heading.setStyleSheet("color: #ffc08c;" if attention else "color: #80dfc8;")
+        layout.addWidget(heading)
+        progress = QProgressBar()
+        progress.setObjectName("setupProgress")
+        progress.setProperty("attention", attention)
+        progress.setAccessibleName("Windows setup progress")
+        progress.setAccessibleDescription(title)
+        progress.setTextVisible(False)
+        if not complete and not attention and phase == 0:
+            progress.setRange(0, 0)
+        else:
+            progress.setRange(0, len(stages))
+            progress.setValue(len(stages) if complete else phase)
+        progress.setToolTip("Stages: Windows installation → integration drivers → Yttrium and Vulkan → graphics verification")
+        layout.addWidget(progress)
+        layout.addWidget(label(message, "muted", True))
+        return indicator
 
     @staticmethod
     def vm_active(vm):
