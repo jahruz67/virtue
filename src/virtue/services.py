@@ -21,6 +21,7 @@ class VMService:
         self._host_report = host
         self._host_override = host is not None
         self._host_lock = threading.Lock()
+        self._assets = None
         if backend is None:
             from .backends.linux import LinuxBackend
             backend = LinuxBackend(self.store.root, host)
@@ -47,6 +48,18 @@ class VMService:
         report["configuration_errors"] = self.store.errors.copy()
         return report
 
+    def prepare_host(self, progress=lambda message: None, *, repair: bool = False):
+        if sys.platform != "linux":
+            # Keep the existing read-only preview usable on development hosts.
+            return {}
+        if self._assets is None or repair:
+            from .setup import prepare_runtime
+            self._assets = prepare_runtime(progress, repair=repair)
+            if not self._host_override:
+                self._host_report = None
+                self.backend.host = None
+        return self._assets
+
     def _require_stopped(self, config: VMConfig) -> None:
         state = self.backend.status(config.id).get("state", "error")
         if state != "stopped":
@@ -68,6 +81,10 @@ class VMService:
         if "graphics" in status:
             status["active_graphics"] = status.pop("graphics")
         result.update(status)
+        setup_path = self.store.directory(config.id) / "setup-progress.json"
+        if config.auto_setup and not config.installed and setup_path.is_file() and not setup_path.is_symlink():
+            if setup_path.stat().st_size <= 128 * 1024:
+                result["setup"] = json.loads(setup_path.read_text(encoding="utf-8"))
         disk = self.store.directory(config.id) / "disk.qcow2"
         if disk.exists():
             stat = disk.stat()
@@ -85,15 +102,73 @@ class VMService:
 
     def list_vms(self) -> list[dict]:
         with self.store.transaction():
-            return [self._view(config) for config in self.store.list()]
+            results = []
+            for config in self.store.list():
+                if config.auto_setup and not config.installed:
+                    config = self._reconcile_setup(config)
+                results.append(self._view(config))
+            return results
 
-    def create_vm(self, options: dict) -> dict:
+    def _reconcile_setup(self, config):
+        directory = self.store.directory(config.id)
+        if not (directory / "virtue-setup.iso").is_file():
+            return config
+        progress = self.backend.setup_status(config.id)
+        if not progress:
+            return config
+        report = progress.pop("graphics_report", None)
+        if progress.get("state") == "ready":
+            from .graphics import classify_guest_report
+            try:
+                verification = classify_guest_report(report or {})
+            except (ValueError, TypeError, KeyError):
+                verification = {"state": "invalid"}
+            if verification["state"] != "hardware_rendering_observed":
+                progress = {"state": "error", "message": "The required accelerated graphics check did not pass."}
+            else:
+                atomic_json(directory / "gpu-report.json", verification)
+                config = replace(config, installed=True, iso_path="")
+                self.store.save(config)
+        atomic_json(directory / "setup-progress.json", progress)
+        return config
+
+    def create_vm(self, options: dict, progress=lambda message: None) -> dict:
+        assets = self.prepare_host(progress)
         with self.store.transaction():
             config = VMConfig.new(options)
             self._validate_resources(config)
             self.backend.create(config)
             self.store.save(config)
+            try:
+                from .provisioning import prepare_windows
+                prepare_windows(config, self.store.directory(config.id), assets, progress)
+                self.store.save(config)
+                progress("Starting the automatic Windows installation…")
+                self.backend.start(config)
+            except Exception as exc:
+                atomic_json(self.store.directory(config.id) / "setup-progress.json", {"state": "error", "message": str(exc)})
+                raise
             return self._view(config)
+
+    def retry_setup(self, vm_id: str, progress=lambda message: None):
+        assets = self.prepare_host(progress)
+        with self.store.transaction():
+            config = self.store.load(vm_id)
+            if not config.auto_setup or config.installed:
+                raise ValidationError("This Windows environment has no unfinished automatic installation.")
+            if self.backend.status(vm_id).get("state") == "stopped":
+                from .provisioning import prepare_windows
+                prepare_windows(config, self.store.directory(vm_id), assets, progress)
+                self.store.save(config)
+                return self.backend.start(config)
+            return self.backend.retry_setup(vm_id)
+
+    def windows_credentials(self, vm_id: str) -> dict:
+        self.store.load(vm_id)
+        path = self.store.directory(vm_id) / "windows-credentials.json"
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+            raise ValidationError("Windows sign-in details are unavailable for this environment.")
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def update_vm(self, vm_id: str, options: dict) -> dict:
         allowed = {"name", "memory_mib", "cpus", "disk_gib", "installed", "iso_path",

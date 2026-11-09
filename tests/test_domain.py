@@ -17,7 +17,7 @@ def test_resources_reserve_host_and_other_vms(tmp_path):
 
 @pytest.mark.parametrize("change", [
     {"id": "../other"}, {"cpus": True}, {"memory_mib": 1000}, {"disk_gib": 20},
-    {"windows_version": "linux"}, {"graphics": "yttrium"}, {"name": "\n"},
+    {"windows_version": "linux"}, {"graphics": "invalid"}, {"graphics_consent": False}, {"name": "\n"},
     {"machine_type": "q35,accel=tcg"}, {"installed": 1}, {"iso_path": "a\x00.iso"},
 ])
 def test_invalid_settings_rejected(change):
@@ -26,8 +26,9 @@ def test_invalid_settings_rejected(change):
         VMConfig.from_dict({**vm.to_dict(), **change})
 
 
-def test_new_cannot_skip_experimental_consent():
-    vm = VMConfig.new({"name": "Windows", "graphics": "yttrium", "graphics_consent": True,
-                       "secure_boot": False})
-    assert vm.graphics == "safe" and vm.secure_boot and not vm.graphics_consent
+def test_new_always_includes_yttrium_and_automatic_setup():
+    vm = VMConfig.new({"name": "Windows", "graphics": "safe", "graphics_consent": False,
+                       "secure_boot": True, "auto_setup": False})
+    assert vm.graphics == "yttrium" and not vm.secure_boot and vm.graphics_consent
+    assert vm.auto_setup
 

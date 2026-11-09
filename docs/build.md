@@ -9,8 +9,8 @@ Branch pushes and pull requests upload workflow artifacts without publishing a r
 
 For pip and DEB builds, Python 3.11–3.13, pip, and a virtual environment are required. Qt is pinned to
 PySide6 Essentials 6.8.3 and shiboken6 6.8.3. Guest execution uses distribution
-QEMU 8+ with GTK; the Yttrium profile uses the separately installed upstream
-Flatpak host bundle. `resources/yttrium-stack.json` records researched revisions
+QEMU 8+ with GTK; the required Yttrium runtime is downloaded and installed by the
+app on first launch. `resources/yttrium-stack.json` records researched revisions
 and upstream asset checksums; it is not a claim that hardware was tested here.
 
 ```sh
@@ -20,7 +20,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
 .venv/bin/python -m virtue --diagnose
 .venv/bin/python -m build
 .venv/bin/python tools/build_deb.py
-sudo apt install ./dist/virtue-desktop_0.1.0_amd64.deb
+sudo apt install ./dist/virtue-desktop_0.1.1_amd64.deb
 virtue
 ```
 
@@ -43,7 +43,7 @@ an identical checkout and build environment. No downloaded binaries are committe
 For Fedora x86_64, install the RPM from the release with DNF:
 
 ```sh
-sudo dnf install ./virtue-desktop-0.1.0-1.x86_64.rpm
+sudo dnf install ./virtue-desktop-0.1.1-1.x86_64.rpm
 virtue
 ```
 

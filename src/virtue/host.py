@@ -250,31 +250,33 @@ def detect_host() -> HostReport:
         add("QEMU desktop display", ok and bool(re.search(r"\bgtk\b", display)), "GTK display backend available." if "gtk" in display else "Install the QEMU GTK/UI package (qemu-system-gui on Ubuntu/Debian).")
         ok, audio = _run([report.qemu, "-audiodev", "help"])
         report.audio_backends = [backend for backend in ("pa", "pipewire", "sdl", "alsa") if re.search(rf"(?m)^\s*{backend}\s*$", audio)]
-        add("QEMU sound", bool(report.audio_backends), "Available backends: " + ", ".join(report.audio_backends) if report.audio_backends else "No supported audio backend found; install QEMU audio/UI modules.", False)
+        add("QEMU sound", bool(report.audio_backends), "Available backends: " + ", ".join(report.audio_backends) if report.audio_backends else "Sound components need repair. Use Retry / repair setup.")
     firmware = find_firmware()
     report.ovmf_code = firmware.get("code", "")
     report.ovmf_vars = firmware.get("vars", "")
     report.ovmf_code_plain = firmware.get("code_plain", "")
     report.ovmf_vars_plain = firmware.get("vars_plain", "")
     report.ovmf_secure = bool(report.ovmf_code and report.ovmf_vars)
-    add("UEFI and enrolled Secure Boot keys", report.ovmf_secure,
+    report.ovmf_code = report.ovmf_code or report.ovmf_code_plain
+    report.ovmf_vars = report.ovmf_vars or report.ovmf_vars_plain
+    add("UEFI firmware", bool(report.ovmf_code and report.ovmf_vars_plain),
         f"Code: {report.ovmf_code}; variables template: {report.ovmf_vars}" if report.ovmf_secure else "Install ovmf (Ubuntu/Debian) or edk2-ovmf (Fedora), including an enrolled Microsoft keys variables template.")
     add("Desktop session", bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), "A Wayland or X11 session is required for the Windows window.")
     report.ready = all(check.ok for check in report.checks if check.required)
     report.errors = [check.detail for check in report.checks if check.required and not check.ok]
 
     flatpak = shutil.which("flatpak")
-    prefix = [flatpak, "run", "org.qemu.yttrium"] if flatpak else []
+    prefix = [flatpak, "run", "--user", "org.qemu.yttrium"] if flatpak else []
     ok, version = _run(prefix + ["--version"]) if prefix else (False, "Flatpak is not installed.")
     report.yttrium_available = ok
     report.versions["yttrium"] = version.splitlines()[0] if version else ""
-    add("Yttrium host bundle", ok, report.versions["yttrium"] if ok else "Install the verified org.qemu.yttrium v2026-11-02 bundle; see docs/yttrium.md.", False)
+    add("Yttrium host bundle", ok, report.versions["yttrium"] if ok else "Automatic Yttrium setup has not finished. Retry setup in the app.")
     props_ok = False
     if ok:
         report.yttrium_prefix = prefix
         _, props = _run(prefix + ["-device", "virtio-vga-gl,help"])
         props_ok = all(re.search(rf"(?m)^\s*{prop}\s*=", props) for prop in ("blob", "venus", "hostmem"))
-        add("Yttrium GPU device", props_ok, "VirtIO GPU exposes blob, venus and hostmem." if props_ok else "The installed QEMU lacks one or more required VirtIO GPU properties.", False)
+        add("Yttrium GPU device", props_ok, "VirtIO GPU exposes blob, venus and hostmem." if props_ok else "The installed QEMU lacks one or more required VirtIO GPU properties.")
     vulkaninfo = shutil.which("vulkaninfo")
     vk_ok, vk_text = _run([vulkaninfo], timeout=15) if vulkaninfo else (False, "Install vulkan-tools to inspect Vulkan capabilities.")
     report.gpus = parse_vulkaninfo(vk_text) if vk_ok else []
@@ -289,7 +291,7 @@ def detect_host() -> HostReport:
         except (OSError, ValueError):
             continue
     candidates = [gpu for gpu in report.gpus if gpu.get("venus_candidate")]
-    add("Vulkan hardware candidate", bool(candidates), ", ".join(gpu["name"] for gpu in candidates) + "; Vulkan 1.1+ and VK_KHR_external_memory_fd present. Actual shared-memory/rendering compatibility remains unverified." if candidates else "No qualifying hardware Vulkan device found. Install/update the GPU Vulkan driver and vulkan-tools. CPU renderers do not qualify.", False)
+    add("Vulkan hardware candidate", bool(candidates), ", ".join(gpu["name"] for gpu in candidates) + "; Vulkan 1.1+ and VK_KHR_external_memory_fd present. Actual shared-memory/rendering compatibility remains unverified." if candidates else "No compatible hardware Vulkan device is available. Open Repair setup to check the graphics driver.")
     try:
         cpuinfo = Path("/proc/cpuinfo").read_text()
     except OSError:
@@ -298,6 +300,8 @@ def detect_host() -> HostReport:
     if need_pat:
         report.yttrium_accel = "kvm,honor-guest-pat=on"
         kernel_ok = kernel_ok and _version_tuple(report.versions.get("yttrium", "")) >= (11, 0, 0)
-    add("Venus kernel and driver requirements", kernel_ok, kernel_detail, False)
-    report.yttrium_ready = report.ready and ok and props_ok and bool(candidates) and kernel_ok
+    add("Venus kernel and driver requirements", kernel_ok, kernel_detail)
+    report.ready = all(check.ok for check in report.checks if check.required)
+    report.errors = [check.detail for check in report.checks if check.required and not check.ok]
+    report.yttrium_ready = report.ready
     return report

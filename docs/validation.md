@@ -73,8 +73,8 @@ QEMU, OVMF and swtpm package versions, and Wayland/X11 session type. Follow
    ```sh
    .venv/bin/python -m build
    .venv/bin/python tools/build_deb.py
-   dpkg-deb --info dist/virtue-desktop_0.1.0_amd64.deb
-   dpkg-deb --contents dist/virtue-desktop_0.1.0_amd64.deb
+   dpkg-deb --info dist/virtue-desktop_0.1.1_amd64.deb
+   dpkg-deb --contents dist/virtue-desktop_0.1.1_amd64.deb
    (cd dist && sha256sum --check ./*.deb.sha256)
    ```
 

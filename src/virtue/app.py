@@ -7,12 +7,14 @@ import os
 from pathlib import Path
 import sys
 
+from . import __version__
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Virtue — Windows on Linux, powered by KVM")
     parser.add_argument("--data-dir", type=Path, help="Private VM storage directory")
     parser.add_argument("--diagnose", action="store_true", help="Print host diagnostics as JSON and exit")
-    parser.add_argument("--version", action="version", version="Virtue 0.1.0")
+    parser.add_argument("--version", action="version", version=f"Virtue {__version__}")
     args = parser.parse_args(argv)
     os.umask(0o077)
     if args.diagnose:

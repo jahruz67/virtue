@@ -19,43 +19,36 @@ virtualization enabled in firmware, and enough RAM to leave at least 2 GiB (or
 4 GiB guest RAM, 2 vCPUs and a 64 GiB disk. A legal Windows ISO and license are
 provided by the user.
 
-```sh
-sudo apt update
-sudo apt install qemu-system-x86 qemu-system-gui qemu-utils ovmf swtpm \
-  swtpm-tools libegl1 libopengl0 libxkbcommon0 libxcb-cursor0 libpulse0 \
-  python3-venv
-# Add your account to the kvm group if /dev/kvm is inaccessible, then log out/in.
-sudo usermod -aG kvm "$USER"
-python3 -m venv .venv
-.venv/bin/pip install '.[test]'
-.venv/bin/virtue
-```
+Open the downloaded DEB or RPM in your desktop's software installer, install it,
+and launch **Virtue** from the applications menu. Required system packages are
+dependencies, not optional recommendations. On first launch, Virtue downloads
+and verifies the Yttrium runtime, Windows drivers and Vulkan runtime. A desktop
+administrator prompt handles host changes when needed. No terminal is required.
 
 Never run the desktop as root. The app's **Host diagnostics** shows missing
 dependencies and permissions. See [build and packaging](docs/build.md) for Fedora,
 native DEB packaging, headless diagnostics, and reproducible builds.
 
 Tagged GitHub prereleases provide an amd64 DEB for Ubuntu/Debian and an x86_64 RPM
-for Fedora, with SHA-256 checksums. Install a downloaded package with
-`sudo apt install ./virtue-desktop_0.1.0_amd64.deb` or
-`sudo dnf install ./virtue-desktop-0.1.0-1.x86_64.rpm`. The RPM uses Fedora's
+for Fedora, with SHA-256 checksums. Open the downloaded package in the desktop's
+software installer. The RPM uses Fedora's
 system Python and PySide6. These remain engineering previews requiring target-host
 validation; macOS packages are not provided.
 
 ## Install Windows
 
-1. Open Virtue and choose **New Windows**. Select a Windows 11 x64 ISO, resource
-   preset or explicit RAM/vCPU/disk values, and optionally a VirtIO driver ISO.
-2. Create the VM, then launch it. Windows Setup runs in QEMU's separate GTK window.
-   Click that window and press a key when the UEFI installer requests it.
-3. Complete ordinary Windows installation and activation. The initial AHCI disk
-   and Intel network adapter work with Windows' built-in drivers. After the first
-   reboot, let the hard disk boot instead of starting Setup again.
-4. Shut down Windows. Open VM settings and mark installation complete to detach
-   the installer on later boots. Drivers media can remain attached.
-5. Optionally install VirtIO drivers from the attached ISO, shut down, and enable
-   VirtIO networking in settings. Changing the system disk to VirtIO requires
-   loading the storage driver first; keep a snapshot and consult the driver docs.
+1. Choose **Create Windows** and select your Windows 10/11 x64 ISO.
+2. Select **Create Windows**. Virtue reads the ISO, selects its x64 image, prepares
+   an answer file and installation media, and starts Windows installation.
+3. Leave the VM running while Windows and its required integration drivers,
+   Yttrium graphics and Vulkan runtime install across automatic restarts.
+4. The Windows card reports progress and becomes ready after a hardware rendering
+   check. Virtue detaches the installer on subsequent boots and signs Windows in
+   automatically. Generated credentials are available in **Manage Windows**.
+
+No driver downloads, guest terminal commands, manual firmware changes, optional
+graphics toggle or manual installation-complete checkbox are part of this flow.
+Use **Retry / repair setup** or **Retry automatic setup** if setup reports a failure.
 
 Windows remains a separately managed guest. Fullscreen, scaling, keyboard/mouse
 capture and audio use QEMU GTK (View menu; release captured input with Ctrl+Alt+G).
@@ -63,21 +56,19 @@ The default user network permits outbound connections without opening host ports
 Clipboard, shared folders, seamless individual apps and multi-monitor integration
 are not implemented in this preview.
 
-## Experimental graphics and recovery
+## Required Yttrium graphics and recovery
 
-Install the compatible upstream Yttrium Flatpak stack and inspect **Host
-diagnostics**. Stop the VM, open graphics setup and explicitly accept the guest
-driver security implications. Virtue creates an offline recovery snapshot before
-enabling the Yttrium device. Follow [Yttrium setup](docs/yttrium.md) for guest
-Secure Boot, test-signing, certificates and drivers. These steps remain explicit
-guest administration; Virtue does not modify host security controls.
+Yttrium is the default graphics stack for new VMs and is required by host readiness
+checks. Virtue installs its pinned Flatpak and matching Windows driver automatically.
+New VMs use unenrolled UEFI variables and Windows test signing as required by the
+current upstream driver. Certificates, the Vulkan runtime, hibernation settings,
+driver installation and restarts are handled by the provisioning worker.
 
-**Launching a VM does not prove acceleration.** Collect real guest rendering
-evidence with the supplied script, import the report, and run the graphics/CAD
-acceptance tests. A report is historical, user-supplied evidence. SOLIDWORKS is
-not certified or confirmed compatible. Use **Launch with safe display** or restore
-the pre-driver snapshot after a driver failure. Snapshot restore also restores
-firmware and TPM state; retain your Windows BitLocker recovery key separately.
+**Launching a VM does not prove acceleration.** Automatic setup collects an actual
+OpenGL draw result and checks for hardware Venus/Zink rendering before reporting
+completion. SOLIDWORKS compatibility and Direct3D workloads still require their
+own acceptance tests. Snapshot restore also restores firmware and TPM state;
+retain your Windows BitLocker recovery key separately.
 
 ## Data and lifecycle
 
@@ -90,7 +81,8 @@ is a separate destructive action. Pause/resume is unavailable with Yttrium.
 Cold snapshots include disk, UEFI variables and TPM state. A restore preserves a
 recovery snapshot first. Export produces a complete offline `.virtue` archive;
 import verifies hashes and paths and assigns a fresh VM ID. Backups contain user
-data and TPM secrets: store them privately. Imported VMs boot with safe graphics.
+data, Windows sign-in details and TPM secrets: store them privately. Imported VMs
+retain their configured graphics stack and must pass the destination host checks.
 Keep external backups; local snapshots do not protect against a failed host disk.
 
 ## Development

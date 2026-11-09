@@ -41,6 +41,7 @@ class MainWindow(QMainWindow):
         self._last_poll_error = ""
         self.tasks = Tasks(self)
         self.tasks.changed.connect(self._busy_changed)
+        self.tasks.progress.connect(self._setup_progress)
         self.setWindowTitle("Virtue · Windows, within reach")
         self.setWindowIcon(app_icon())
         self.setStyleSheet(STYLE)
@@ -83,6 +84,10 @@ class MainWindow(QMainWindow):
         banner_layout.setContentsMargins(16, 12, 16, 12)
         self.banner_text = label("Checking your host and virtualization dependencies…", wrap=True)
         banner_layout.addWidget(self.banner_text, 1)
+        self.repair_button = QPushButton("Retry / repair setup")
+        self.repair_button.clicked.connect(self.repair_setup)
+        self.repair_button.hide()
+        banner_layout.addWidget(self.repair_button)
         root.addWidget(self.banner)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
@@ -100,11 +105,10 @@ class MainWindow(QMainWindow):
         footer = QHBoxLayout()
         footer.addWidget(label("LINUX FIRST  ·  QEMU / KVM", "eyebrow"))
         footer.addStretch()
-        help_button = QPushButton("Help && guest tools  ▾")
+        help_button = QPushButton("Help  ▾")
         help_menu = QMenu(help_button)
-        help_menu.addAction("Display && experimental graphics", self.show_graphics_guide)
+        help_menu.addAction("Automatic Windows setup", self.show_graphics_guide)
         help_menu.addAction("Open setup guides", lambda: self.open_support_folder("docs"))
-        help_menu.addAction("Open guest scripts", lambda: self.open_support_folder("guest"))
         help_button.setMenu(help_menu)
         footer.addWidget(help_button)
         root.addLayout(footer)
@@ -124,13 +128,24 @@ class MainWindow(QMainWindow):
         self.import_button.setEnabled(not busy)
         self.diagnostics_button.setEnabled(not busy)
         self.cards.setEnabled(not busy)
+        self.repair_button.setEnabled(not busy)
+
+    def _setup_progress(self, message):
+        self.banner_text.setText(message)
+        self.statusBar().showMessage(message)
+
+    def _setup_failed(self, error):
+        self.banner_text.setText(str(error))
+        self.repair_button.show()
+        self._error(error)
+        self.refresh_list(quiet=True)
 
     def _error(self, error):
         message = str(error) or type(error).__name__
         self.statusBar().showMessage(message)
         QMessageBox.warning(self, "Unable to complete this action", message)
 
-    def _perform(self, message, fn, success=None, *, refresh=True):
+    def _perform(self, message, fn, success=None, *, refresh=True, failure=None):
         if self.tasks.busy:
             return
         self.statusBar().showMessage(message)
@@ -142,14 +157,23 @@ class MainWindow(QMainWindow):
             if refresh:
                 self.refresh_list()
 
-        self.tasks.submit(fn, complete, self._error)
+        self.tasks.submit(fn, complete, failure or self._error)
 
     def _poll(self):
         if not self.tasks.busy and QApplication.activeModalWidget() is None:
             self.refresh_list(quiet=True)
 
     def refresh_all(self):
-        self._perform("Checking host readiness…", lambda: (self.service.host_report(), self.service.list_vms()), self._loaded, refresh=False)
+        def prepare():
+            self.service.prepare_host(self.tasks.progress.emit)
+            return self.service.host_report(), self.service.list_vms()
+        self._perform("Preparing all required components…", prepare, self._loaded, refresh=False, failure=self._setup_failed)
+
+    def repair_setup(self):
+        def repair():
+            self.service.prepare_host(self.tasks.progress.emit, repair=True)
+            return self.service.host_report(), self.service.list_vms()
+        self._perform("Repairing the Windows runtime…", repair, self._loaded, refresh=False, failure=self._setup_failed)
 
     def _loaded(self, result):
         self.host, vms = result
@@ -171,16 +195,17 @@ class MainWindow(QMainWindow):
 
     def render_host(self):
         if self.host.get("ready"):
-            self.banner_text.setText("Your host is ready for Windows. Hardware virtualization and installation dependencies are available.")
+            self.banner_text.setText("Ready. Choose your Windows ISO; Virtue handles installation, drivers and Yttrium graphics automatically.")
             self.banner.setObjectName("banner")
         else:
             missing = [c.get("name", "Dependency") for c in self.host.get("checks", []) if c.get("required") and not c.get("ok")]
             detail = ", ".join(missing) if missing else "a compatible Linux x86-64 host and working KVM"
-            self.banner_text.setText(f"Setup needs attention: {detail}. Open Host & diagnostics for details and installation guidance.")
+            self.banner_text.setText(f"Setup needs attention: {detail}. Use Retry / repair setup; no terminal is needed.")
             self.banner.setObjectName("warning")
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
         self.create_button.setEnabled(bool(self.host.get("ready")) and not self.tasks.busy)
+        self.repair_button.setVisible(not bool(self.host.get("ready")))
 
     def render_vms(self, vms):
         self.vms = vms
@@ -239,10 +264,13 @@ class MainWindow(QMainWindow):
         if self.vm_active(vm) and active_graphics == "safe" and vm.get("graphics") == "yttrium":
             description += "  ·  Compatible display (safe launch)"
         else:
-            description += "  ·  Experimental graphics" if active_graphics == "yttrium" else "  ·  Compatible display"
+            description += "  ·  Yttrium graphics" if active_graphics == "yttrium" else "  ·  Compatible display"
         if not vm.get("installed", False):
             description += "  ·  Installation in progress"
         content.addWidget(label(description, "muted", True))
+        setup = vm.get("setup", {})
+        if setup:
+            content.addWidget(label(str(setup.get("message", "Installing Windows automatically…")), "muted", True))
         if vm.get("error"):
             error = label(str(vm["error"]), wrap=True)
             error.setStyleSheet("color:#ffc08c;")
@@ -255,6 +283,10 @@ class MainWindow(QMainWindow):
         launch.clicked.connect(lambda: self.resume_vm(vm) if state == "paused" else self.start_vm(vm))
         launch.setToolTip("Open the QEMU desktop window. A running VM already has its own display window." if state == "running" else "Boot your Windows environment")
         actions.addWidget(launch)
+        if setup.get("state") == "error":
+            retry = QPushButton("Retry automatic setup")
+            retry.clicked.connect(lambda: self._perform("Retrying automatic Windows setup…", lambda: self.service.retry_setup(vm["id"], self.tasks.progress.emit)))
+            actions.addWidget(retry)
         more = QPushButton("Manage Windows  ▾")
         more.setMenu(self.vm_menu(vm, more))
         actions.addWidget(more)
@@ -290,11 +322,7 @@ class MainWindow(QMainWindow):
         action("Expand disk…", lambda: self.expand_vm(vm), stopped)
         action("Export full backup…", lambda: self.export_vm(vm), stopped)
         menu.addSeparator()
-        action("Launch with safe display", lambda: self.start_vm(vm, safe=True), stopped and bool(self.host.get("ready")))
-        if vm.get("graphics") == "yttrium":
-            action("Return to compatible graphics", lambda: self.disable_graphics(vm), stopped)
-        else:
-            action("Set up Yttrium acceleration…", lambda: self.enable_graphics(vm), stopped and bool(vm.get("installed")))
+        action("Windows sign-in details…", lambda: self.show_windows_credentials(vm), bool(vm.get("auto_setup")))
         action("Import guest GPU report…", lambda: self.import_report(vm))
         action("Guest graphics setup guide", self.show_graphics_guide)
         menu.addSeparator()
@@ -307,7 +335,12 @@ class MainWindow(QMainWindow):
         dialog = VMDialog(self.host, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             options = dialog.options()
-            self._perform("Creating a thin-provisioned Windows disk and firmware…", lambda: self.service.create_vm(options))
+            self._perform("Installing Windows and all required features…", lambda: self.service.create_vm(options, self.tasks.progress.emit), failure=self._setup_failed)
+
+    def show_windows_credentials(self, vm):
+        def show(details):
+            QMessageBox.information(self, "Windows sign-in", f"Username: {details['username']}\nPassword: {details['password']}")
+        self._perform("Reading Windows sign-in details…", lambda: self.service.windows_credentials(vm["id"]), show, refresh=False)
 
     def edit_vm(self, vm):
         dialog = VMDialog(self.host, vm, self)
@@ -407,7 +440,7 @@ class MainWindow(QMainWindow):
         self._perform("Refreshing host and graphics diagnostics…", self.service.host_report, show, refresh=False)
 
     def show_graphics_guide(self):
-        TextDialog("Display & experimental graphics", GRAPHICS_GUIDE, self, rich=True).exec()
+        TextDialog("Automatic Windows setup", GRAPHICS_GUIDE, self, rich=True).exec()
 
     @staticmethod
     def support_folder(name):

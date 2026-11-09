@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "virtio": {
+    "url": "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.271-1/virtio-win-0.1.271.iso",
+    "sha256": "bbe6166ad86a490caefad438fef8aa494926cb0a1b37fa1212925cfd81656429",
+    "filename": "virtio-win.iso",
+    "source": "https://github.com/virtio-win/virtio-win-pkg-scripts/issues/121"
+  },
+  "vulkan": {
+    "url": "https://sdk.lunarg.com/sdk/download/1.4.350.0/windows/VulkanRT-X64-1.4.350.0-Installer.exe",
+    "sha256": "2e26a920afe0cc7adb49c3133fb9dd36fc7a4a1e93277717800c48b32eefffdf",
+    "filename": "VulkanRT.exe",
+    "source": "https://github.com/microsoft/winget-pkgs/blob/master/manifests/k/KhronosGroup/VulkanRT/1.4.350.0/KhronosGroup.VulkanRT.installer.yaml"
+  }
+}

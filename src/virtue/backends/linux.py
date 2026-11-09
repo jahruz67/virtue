@@ -349,6 +349,9 @@ class LinuxBackend:
             for iso in (config.iso_path if not config.installed else "", config.drivers_iso_path):
                 if iso:
                     grants.append(f"--filesystem={Path(iso).resolve()}:ro")
+            setup_iso = directory / "virtue-setup.iso"
+            if getattr(config, "auto_setup", False) and not config.installed and setup_iso.is_file():
+                grants.append(f"--filesystem={setup_iso}:ro")
             prefix[index:index] = grants
         return prefix
 
@@ -405,7 +408,7 @@ class LinuxBackend:
             self._require_stopped(config.id)
             if (directory / "restore_pending.json").exists():
                 raise BackendError("A snapshot restore was interrupted. Preserve the VM folder and consult recovery documentation before launch.")
-            for filename in ("disk.qcow2", "OVMF_CODE.fd", "OVMF_VARS.fd", "firmware.json", "tpm", "qemu.log"):
+            for filename in ("disk.qcow2", "OVMF_CODE.fd", "OVMF_VARS.fd", "firmware.json", "tpm", "qemu.log", "setup-events.jsonl"):
                 if (directory / filename).is_symlink():
                     raise BackendError("Managed VM files and directories must not be symbolic links.")
             if not (directory / "disk.qcow2").is_file():
@@ -417,14 +420,20 @@ class LinuxBackend:
             for name in ("qmp.sock", "tpm.sock", "qga.sock", "qemu.pid"):
                 (runtime / name).unlink(missing_ok=True)
             graphics = "safe" if safe_graphics else config.graphics
+            setup_iso = directory / "virtue-setup.iso" if getattr(config, "auto_setup", False) and not config.installed else None
+            if setup_iso and not setup_iso.is_file():
+                raise BackendError("Automatic Windows installation media is missing. Retry setup in the app.")
             prefix = self._prefix(graphics, directory, runtime, config)
             code = self._firmware_code(directory)
             hyperv = self._hyperv(prefix, config)
+            audio_backend = self._audio_backend(prefix)
+            if not audio_backend:
+                raise BackendError("The required sound components are unavailable. Use Retry / repair setup.")
             command = build_qemu_command(config, directory, prefix, code, runtime / "qmp.sock", runtime / "tpm.sock",
-                                         safe_graphics=safe_graphics, audio_backend=self._audio_backend(prefix),
+                                         safe_graphics=safe_graphics, audio_backend=audio_backend,
                                          hyperv=hyperv,
                                          accelerator=getattr(host, "yttrium_accel", "kvm") if graphics == "yttrium" else "kvm",
-                                         guest_agent_socket=runtime / "qga.sock")
+                                         guest_agent_socket=runtime / "qga.sock", setup_iso=setup_iso)
             command += ["-pidfile", str(runtime / "qemu.pid")]
             metadata = {"vm_id": config.id, "qmp": str(runtime / "qmp.sock"), "graphics": graphics,
                         "machine_type": config.machine_type, "hyperv_flags": hyperv,
@@ -467,6 +476,16 @@ class LinuxBackend:
                             raise BackendError("QEMU did not enable hardware KVM acceleration.")
                     finally:
                         client.close()
+                    if setup_iso and not (directory / "setup-boot-started").exists():
+                        # Windows DVDs can ask for a key before reading the answer file.
+                        for _ in range(3):
+                            time.sleep(3)
+                            client = self._qmp(config.id)
+                            try:
+                                client.execute("send-key", {"keys": [{"type": "qcode", "data": "spc"}], "hold-time": 100})
+                            finally:
+                                client.close()
+                        (directory / "setup-boot-started").touch(mode=0o600)
                     return self.status(config.id)
                 except BaseException:
                     # Only processes created in this invocation are stopped.
@@ -493,6 +512,46 @@ class LinuxBackend:
                 client.execute(command)
             finally:
                 client.close()
+
+    def setup_status(self, vm_id: str) -> dict | None:
+        from .guest_agent import GuestAgent
+        metadata = self._metadata(vm_id)
+        if not metadata or not self._identity_matches(metadata):
+            return None
+        journal = self._directory(vm_id) / "setup-events.jsonl"
+        if journal.is_file() and not journal.is_symlink():
+            with journal.open("rb") as stream:
+                stream.seek(max(0, journal.stat().st_size - 256 * 1024))
+                lines = stream.read(256 * 1024).splitlines()
+            for line in reversed(lines):
+                try:
+                    value = json.loads(line.decode("utf-8-sig"))
+                    if isinstance(value, dict) and value.get("state") in {"installing", "ready", "error"}:
+                        return value
+                except (ValueError, UnicodeError):
+                    continue
+        try:
+            with GuestAgent(self._runtime_dir(vm_id) / "qga.sock") as agent:
+                return agent.setup_status()
+        except (OSError, ValueError, KeyError, TypeError):
+            return {"state": "installing", "message": "Installing Windows and its integration drivers…"}
+
+    def retry_setup(self, vm_id: str):
+        from .guest_agent import GuestAgent
+        client = self._qmp(vm_id)
+        client.close()
+        command = "$ErrorActionPreference='Stop'; Enable-ScheduledTask -TaskName VirtueFinishSetup; Start-ScheduledTask -TaskName VirtueFinishSetup"
+        with GuestAgent(self._runtime_dir(vm_id) / "qga.sock") as agent:
+            process = agent.execute("guest-exec", {"path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                                    "arg": ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", command], "capture-output": True})
+            for _ in range(20):
+                result = agent.execute("guest-exec-status", {"pid": process["pid"]})
+                if result.get("exited"):
+                    if result.get("exitcode") != 0:
+                        raise BackendError("Windows could not resume automatic setup. Its setup report has been preserved.")
+                    return
+                time.sleep(0.25)
+            raise BackendError("Windows did not acknowledge the automatic setup retry.")
 
     def shutdown(self, vm_id: str):
         """Request ACPI shutdown. Never escalates a slow guest to data loss."""

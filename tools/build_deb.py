@@ -28,7 +28,8 @@ DEPENDENCIES = (
     "libxkbcommon0, libxkbcommon-x11-0, libxcb-cursor0, libxcb-icccm4, "
     "libxcb-image0, libxcb-keysyms1, libxcb-render-util0, libxcb-shape0, "
     "libxcb-randr0, libxcb-xfixes0, libxcb-sync1, libx11-xcb1, "
-    "libfontconfig1, libdbus-1-3, libpulse0, xdg-utils"
+    "libfontconfig1, libdbus-1-3, libpulse0, xdg-utils, flatpak, vulkan-tools, "
+    "swtpm-tools, pkexec, mate-polkit, acl, udev, xorriso, wimtools, 7zip, mesa-vulkan-drivers"
 )
 
 
@@ -119,6 +120,13 @@ def main() -> int:
                             "from virtue.app import main\nraise SystemExit(main())\n", encoding="utf-8", newline="\n")
         launcher.chmod(0o755)
         executables.add(launcher)
+        helper = payload / "usr/libexec/virtue-setup-host"
+        helper.parent.mkdir(parents=True)
+        helper.write_text((ROOT / "packaging/linux/virtue-setup-host").read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+        executables.add(helper)
+        rules = payload / "usr/lib/udev/rules.d"
+        rules.mkdir(parents=True)
+        (rules / "70-virtue-kvm.rules").write_text((ROOT / "packaging/linux/70-virtue-kvm.rules").read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
         share = payload / "opt" / "virtue" / "share"
         share.mkdir(parents=True)
         for name in ("docs", "guest", "resources"):
@@ -141,9 +149,8 @@ def main() -> int:
             f"Package: virtue-desktop\nVersion: {VERSION}\nArchitecture: amd64\n"
             "Maintainer: Virtue contributors <maintainers@virtue.invalid>\nSection: otherosfs\n"
             f"Priority: optional\nInstalled-Size: {installed_size}\nDepends: {DEPENDENCIES}\n"
-            "Recommends: flatpak, vulkan-tools, swtpm-tools\n"
             "Description: Linux-first Windows virtual machine desktop (engineering preview)\n"
-            " Real QEMU/KVM lifecycle, private storage, recovery and experimental Yttrium.\n",
+            " Automatic Windows installation, required Yttrium graphics and private VM storage.\n",
             encoding="utf-8", newline="\n")
         digest_lines = []
         for path in sorted(payload.rglob("*")):

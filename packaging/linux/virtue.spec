@@ -18,13 +18,20 @@ Requires:       qemu-img
 Requires:       edk2-ovmf
 Requires:       swtpm
 Requires:       xdg-utils
-Recommends:     flatpak
-Recommends:     vulkan-tools
-Recommends:     swtpm-tools
+Requires:       flatpak
+Requires:       vulkan-tools
+Requires:       swtpm-tools
+Requires:       /usr/bin/pkexec
+Requires:       mate-polkit
+Requires:       /usr/bin/setfacl
+Requires:       /usr/bin/xorriso
+Requires:       /usr/bin/wimlib-imagex
+Requires:       ( /usr/bin/7z or /usr/bin/7zz )
+Requires:       mesa-vulkan-drivers
 
 %description
 Linux-first desktop for real QEMU/KVM lifecycle, private VM storage, recovery,
-and experimental Yttrium graphics. Windows media and licenses are not included.
+and required Yttrium graphics with automatic guest setup. Windows media and licenses are not included.
 Uses Fedora's system Python and PySide6 packages; Qt is not bundled.
 
 %prep
@@ -39,5 +46,7 @@ cp -a "%{virtue_payload}/." "%{buildroot}/"
 %defattr(-,root,root,-)
 /opt/virtue
 /usr/bin/virtue
+/usr/libexec/virtue-setup-host
+/usr/lib/udev/rules.d/70-virtue-kvm.rules
 /usr/share/applications/virtue.desktop
 /usr/share/icons/hicolor/scalable/apps/virtue.svg

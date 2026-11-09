@@ -42,7 +42,7 @@ def package_builder(tmp_path, monkeypatch):
         (root / name).write_text("notice", encoding="utf-8")
     packaging = root / "packaging/linux"
     packaging.mkdir(parents=True)
-    for name in ("virtue.desktop", "virtue.svg"):
+    for name in ("virtue.desktop", "virtue.svg", "virtue-setup-host", "70-virtue-kvm.rules"):
         (packaging / name).write_text("desktop resource", encoding="utf-8")
     write_wheel(root / "dist" / f"virtue_desktop-{build_deb.VERSION}-py3-none-any.whl",
                 [("virtue/app.py", b"# application", 0o644)])
@@ -107,9 +107,11 @@ def test_deb_directories_permissions_and_checksums(package):
             assert entries[str(parent)].mode == 0o755
             assert names.index(str(parent)) < names.index(name)
     assert entries["usr/bin/virtue"].mode == 0o755
+    assert entries["usr/libexec/virtue-setup-host"].mode == 0o755
     assert entries["opt/virtue/lib/" + HELPER_PATH].mode == 0o755
     assert entries["opt/virtue/lib/" + LONG_PATH].mode == 0o644
     assert b"\r" not in files["usr/bin/virtue"]
+    assert b"\r" not in files["usr/libexec/virtue-setup-host"]
     with tarfile.open(fileobj=io.BytesIO(members["control.tar.gz"])) as archive:
         control = {member.name.removeprefix("./"): archive.extractfile(member).read() for member in archive if member.isfile()}
     expected = {name: hashlib.md5(content, usedforsecurity=False).hexdigest() for name, content in files.items()}
@@ -117,6 +119,9 @@ def test_deb_directories_permissions_and_checksums(package):
     assert recorded == expected
     fields = dict(line.split(": ", 1) for line in control["control"].decode("utf-8").splitlines() if ": " in line)
     assert int(fields["Installed-Size"]) * 1024 >= sum(map(len, files.values()))
+    assert b"Recommends:" not in control["control"]
+    for dependency in ("flatpak", "vulkan-tools", "swtpm-tools", "pkexec", "xorriso", "wimtools", "7zip"):
+        assert dependency in fields["Depends"].split(", ")
     checksum = f"{hashlib.sha256(package.read_bytes()).hexdigest()}  {package.name}\n".encode("ascii")
     assert package.with_suffix(".deb.sha256").read_bytes() == checksum
 

@@ -16,7 +16,7 @@ from .domain import VMConfig, ValidationError
 def _allowed(name: str) -> bool:
     path = PurePosixPath(name)
     return (not path.is_absolute() and ".." not in path.parts and "\\" not in name
-            and (name in {"config.json", "disk.qcow2", "OVMF_VARS.fd", "OVMF_CODE.fd", "firmware.json"}
+            and (name in {"config.json", "disk.qcow2", "OVMF_VARS.fd", "OVMF_CODE.fd", "firmware.json", "windows-credentials.json"}
                  or (len(path.parts) > 1 and path.parts[0] == "tpm"
                      and all(part not in {"", ".", ".."} for part in path.parts))))
 
@@ -37,7 +37,7 @@ def export_backup(directory: Path, destination: Path) -> None:
     if destination.exists():
         raise ValidationError("A backup already exists at this path. Choose a new filename.")
     paths = []
-    for name in ("config.json", "disk.qcow2", "OVMF_VARS.fd", "OVMF_CODE.fd", "firmware.json", "tpm"):
+    for name in ("config.json", "disk.qcow2", "OVMF_VARS.fd", "OVMF_CODE.fd", "firmware.json", "windows-credentials.json", "tpm"):
         path = directory / name
         if path.is_symlink():
             raise ValidationError("Cannot back up symbolic links in VM storage.")
@@ -130,10 +130,9 @@ def import_backup(source: Path, root: Path) -> VMConfig:
             config = VMConfig.from_dict(json.loads((staging / "config.json").read_text(encoding="utf-8")))
             config.id = uuid.uuid4().hex
             config.name = (config.name[:69] + " (imported)")
-            # Media is machine-local, and experimental guest state requires safe first boot.
+            # Installation media is machine-local; preserve the installed graphics stack.
             config.iso_path = ""
             config.drivers_iso_path = ""
-            config.graphics = "safe"
             (staging / "tpm").mkdir(mode=0o700, exist_ok=True)
             (staging / "snapshots").mkdir(mode=0o700, exist_ok=True)
             from .store import atomic_json

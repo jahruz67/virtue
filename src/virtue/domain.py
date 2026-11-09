@@ -36,9 +36,10 @@ class VMConfig:
     iso_path: str = ""
     drivers_iso_path: str = ""
     installed: bool = False
-    graphics: str = "safe"
-    secure_boot: bool = True
-    graphics_consent: bool = False
+    graphics: str = "yttrium"
+    secure_boot: bool = False
+    graphics_consent: bool = True
+    auto_setup: bool = False
     network: str = "user"
     created_at: str = ""
     storage_bus: str = "sata"
@@ -74,9 +75,10 @@ class VMConfig:
         data = dict(options)
         for key in ("id", "schema_version", "created_at", "graphics_consent"):
             data.pop(key, None)
-        # Experimental graphics always goes through the consent + checkpoint workflow.
-        data["graphics"] = "safe"
-        data["secure_boot"] = True
+        data["graphics"] = "yttrium"
+        data["secure_boot"] = False
+        data["graphics_consent"] = True
+        data["auto_setup"] = True
         return cls.from_dict({"id": uuid.uuid4().hex, **data})
 
     def validate(self, *, host_memory_mib: int = 0, host_cpus: int = 0,
@@ -108,7 +110,7 @@ class VMConfig:
                                       "and account for other running VMs. Choose a smaller allocation.")
         if host_cpus and self.cpus > max(2, host_cpus - 1):
             raise ValidationError("Leave at least one logical CPU for the host; reduce the virtual CPU count.")
-        for key in ("installed", "secure_boot", "graphics_consent", "virtio_network", "hyperv"):
+        for key in ("installed", "secure_boot", "graphics_consent", "auto_setup", "virtio_network", "hyperv"):
             if type(getattr(self, key)) is not bool:
                 raise ValidationError(f"{key} must be true or false.")
         if self.graphics not in ("safe", "yttrium"):

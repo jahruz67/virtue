@@ -16,6 +16,7 @@ def populated(tmp_path):
     (directory / "OVMF_VARS.fd").write_bytes(b"firmware fixture")
     (directory / "OVMF_CODE.fd").write_bytes(b"firmware code fixture")
     (directory / "firmware.json").write_text('{"code":"OVMF_CODE.fd"}')
+    (directory / "windows-credentials.json").write_text('{"username":"Virtue","password":"fixture"}')
     (directory / "tpm").mkdir()
     (directory / "tpm" / "tpm2-00.permall").write_bytes(b"TPM fixture")
     return store, vm, directory
@@ -27,8 +28,8 @@ def test_offline_archive_roundtrip_assigns_id_and_preserves_state(tmp_path):
     export_backup(directory, backup)
     imported = import_backup(backup, store.root)
     assert imported.id != vm.id
-    assert imported.graphics == "safe"
-    for name in ("disk.qcow2", "OVMF_VARS.fd", "tpm/tpm2-00.permall"):
+    assert imported.graphics == vm.graphics == "yttrium"
+    for name in ("disk.qcow2", "OVMF_VARS.fd", "tpm/tpm2-00.permall", "windows-credentials.json"):
         assert (store.directory(imported.id) / name).read_bytes() == (directory / name).read_bytes()
     with pytest.raises(ValidationError, match="already exists"):
         export_backup(directory, backup)

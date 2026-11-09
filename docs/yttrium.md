@@ -1,4 +1,26 @@
-# Yttrium setup and recovery
+# Automatic Yttrium setup and recovery
+
+New Windows environments require Yttrium. Choose your Windows ISO in the app;
+Virtue downloads and verifies the host bundle, matching guest drivers, VirtIO
+installation media and Vulkan runtime. The desktop's administrator prompt handles
+system packages and KVM access when needed. No terminal is part of the user flow.
+
+Windows installation uses a generated answer file. Guest drivers, certificates,
+test signing, required restarts and a hardware OpenGL draw check are automatic.
+Progress and retry controls appear on the Windows card. Setup is complete only
+after the guest reports hardware rendering. The original Windows ISO is unchanged.
+
+The answer-file flow follows [Microsoft's Windows Setup automation reference](https://learn.microsoft.com/windows-hardware/manufacture/desktop/windows-setup-automation-overview?view=windows-11).
+
+The complete unattended ISO-to-desktop flow requires target-host acceptance before
+a release is called validated. The upstream driver remains experimental even
+though installing it is now mandatory.
+
+## Maintainer reference for the prior manual installation path
+
+The commands and older setup procedures below are retained for driver maintenance
+and recovery of existing guests. They are not steps users of automatic setup need
+to perform, and the older graphics-toggle UI is no longer part of normal setup.
 
 This application implements the Linux launch path and reports host prerequisites separately from imported guest evidence. No guest hardware acceleration or GPU compatibility has been validated on the Windows development machine. Do not treat a launched VM or a green host check as a graphics test.
 

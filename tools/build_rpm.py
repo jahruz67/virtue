@@ -31,6 +31,13 @@ def stage_payload(payload: Path, wheel: Path) -> None:
         encoding="utf-8", newline="\n",
     )
     launcher.chmod(0o755)
+    helper = payload / "usr/libexec/virtue-setup-host"
+    helper.parent.mkdir(parents=True)
+    helper.write_text((ROOT / "packaging/linux/virtue-setup-host").read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+    helper.chmod(0o755)
+    rules = payload / "usr/lib/udev/rules.d"
+    rules.mkdir(parents=True)
+    (rules / "70-virtue-kvm.rules").write_text((ROOT / "packaging/linux/70-virtue-kvm.rules").read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     share = payload / "opt/virtue/share"
     share.mkdir(parents=True)
     for name in ("docs", "guest", "resources"):

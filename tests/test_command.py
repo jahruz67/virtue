@@ -15,13 +15,13 @@ class QemuCommandTests(unittest.TestCase):
         return build_qemu_command(config, Path("/data/Windows, VM"), "/usr/bin/qemu-system-x86_64",
                                   "/usr/share/OVMF_CODE.fd", "/run/u/qmp.sock", "/run/u/tpm.sock", **kwargs)
 
-    def test_safe_installer_kvm_uefi_tpm_no_shell(self):
+    def test_yttrium_installer_kvm_uefi_tpm_no_shell(self):
         cmd = self.command(self.config())
         self.assertIsInstance(cmd, list)
         self.assertIn("kvm", cmd)
         self.assertNotIn("tcg", " ".join(cmd))
         self.assertIn("tpm-crb,tpmdev=tpm0", cmd)
-        self.assertIn("gtk,gl=off", cmd)
+        self.assertIn("gtk,gl=on", cmd)
         self.assertIn("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", cmd)
         self.assertTrue(any("Windows,,11.iso" in arg for arg in cmd))
         block = json.loads(cmd[cmd.index("-blockdev") + 1])
@@ -35,9 +35,9 @@ class QemuCommandTests(unittest.TestCase):
 
     def test_yttrium_requires_security_consent(self):
         with self.assertRaises(BackendError):
-            self.command(self.config(graphics="yttrium", secure_boot=False))
+            self.command(self.config(graphics="yttrium", secure_boot=False, graphics_consent=False))
         with self.assertRaises(BackendError):
-            self.command(self.config(graphics="yttrium", graphics_consent=True))
+            self.command(self.config(graphics="yttrium", graphics_consent=True, secure_boot=True))
 
     def test_yttrium_exact_stack_arguments(self):
         cmd = self.command(self.config(graphics="yttrium", secure_boot=False, graphics_consent=True),
@@ -56,7 +56,7 @@ class QemuCommandTests(unittest.TestCase):
 
     def test_virtio_is_explicit(self):
         cmd = self.command(self.config(storage_bus="virtio", virtio_network=True))
-        self.assertIn("virtio-blk-pci,drive=osdisk,bootindex=1", cmd)
+        self.assertIn("virtio-blk-pci,drive=osdisk,bootindex=0", cmd)
         self.assertIn("virtio-net-pci,netdev=network0", cmd)
 
     def test_control_characters_rejected(self):
@@ -73,6 +73,14 @@ class QemuCommandTests(unittest.TestCase):
         cmd = self.command(self.config(), fullscreen=True, guest_agent_socket="/run/u/qga.sock")
         self.assertIn("-full-screen", cmd)
         self.assertIn("virtserialport,chardev=qga,name=org.qemu.guest_agent.0", cmd)
+
+    def test_automatic_setup_media_and_status_channel(self):
+        cmd = self.command(self.config(drivers_iso_path="/cache/virtio.iso"), setup_iso="/data/virtue-setup.iso")
+        devices = [cmd[index + 1] for index, arg in enumerate(cmd[:-1]) if arg == "-device"]
+        assert "ide-cd,bus=ide.0,drive=installer,bootindex=1" in devices
+        assert "ide-cd,bus=ide.1,drive=drivers" in devices
+        assert "ide-cd,bus=ide.2,drive=virtue_setup" in devices
+        assert "isa-serial,chardev=setup_status" in devices
 
 
 if __name__ == "__main__":

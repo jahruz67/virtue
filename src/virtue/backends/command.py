@@ -33,6 +33,7 @@ def build_qemu_command(
     fullscreen: bool = False,
     accelerator: str = "kvm",
     guest_agent_socket: str | Path | None = None,
+    setup_iso: str | Path | None = None,
 ) -> list[str]:
     graphics = "safe" if safe_graphics else config.graphics
     if graphics == "yttrium" and (config.secure_boot or not config.graphics_consent):
@@ -75,7 +76,8 @@ def build_qemu_command(
         "driver": "qcow2", "node-name": "osdisk", "discard": "unmap",
         "file": {"driver": "file", "filename": str(directory / "disk.qcow2"), "aio": "threads"},
     }, separators=(",", ":"))]
-    disk_boot = 1
+    # A blank disk falls through to the installer; subsequent boots prefer Windows.
+    disk_boot = 0
     # Keeping a built-in Windows storage driver avoids boot failures before the
     # optional VirtIO driver ISO has been installed.
     if getattr(config, "storage_bus", "sata") == "virtio":
@@ -85,11 +87,17 @@ def build_qemu_command(
     cd_index = 0
     if not config.installed and config.iso_path:
         command += ["-drive", f"if=none,id=installer,media=cdrom,readonly=on,file={option(config.iso_path)}",
-                    "-device", "ide-cd,bus=ide.0,drive=installer,bootindex=0"]
+                    "-device", "ide-cd,bus=ide.0,drive=installer,bootindex=1"]
         cd_index += 1
     if config.drivers_iso_path:
         command += ["-drive", f"if=none,id=drivers,media=cdrom,readonly=on,file={option(config.drivers_iso_path)}",
                     "-device", f"ide-cd,bus=ide.{cd_index},drive=drivers"]
+        cd_index += 1
+    if setup_iso:
+        command += ["-drive", f"if=none,id=virtue_setup,media=cdrom,readonly=on,file={option(setup_iso)}",
+                    "-device", f"ide-cd,bus=ide.{cd_index},drive=virtue_setup"]
+        command += ["-chardev", f"file,id=setup_status,path={option(directory / 'setup-events.jsonl')}",
+                    "-device", "isa-serial,chardev=setup_status"]
     network = "virtio-net-pci" if getattr(config, "virtio_network", False) else "e1000e"
     if network not in ("e1000e", "virtio-net-pci"):
         raise BackendError("Unknown network device.")
