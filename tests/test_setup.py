@@ -151,6 +151,25 @@ def test_ready_requires_observed_hardware_rendering(tmp_path):
     assert store.load(config.id).iso_path == ""
 
 
+def test_cached_setup_media_restores_virtio_attachment_without_replacing_credentials(tmp_path, monkeypatch):
+    config = VMConfig.new({"name": "Windows", "iso_path": "/removed/Windows.iso"})
+    media = tmp_path / "virtue-setup.iso"
+    media.write_bytes(b"prepared Windows setup media")
+    credentials = tmp_path / "windows-credentials.json"
+    account = b'{"username":"Virtue","password":"keep-existing"}'
+    credentials.write_bytes(account)
+    virtio = tmp_path / "virtio.iso"
+    virtio.write_bytes(b"verified VirtIO media")
+    monkeypatch.setattr(provisioning, "inspect_windows_iso", lambda *args: pytest.fail("Cached media must be reused"))
+    monkeypatch.setattr(provisioning, "_write_setup_media", lambda *args: pytest.fail("Cached media must not be rebuilt"))
+
+    provisioning.prepare_windows(config, tmp_path, {"virtio": virtio})
+
+    assert config.drivers_iso_path == str(virtio)
+    assert credentials.read_bytes() == account
+    assert media.read_bytes() == b"prepared Windows setup media"
+
+
 def test_repair_media_refreshes_scripts_without_windows_installation_answers(tmp_path, monkeypatch):
     directory = tmp_path / "vm"
     directory.mkdir()

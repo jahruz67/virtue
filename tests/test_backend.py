@@ -214,6 +214,25 @@ class BackendRecoveryTests(unittest.TestCase):
         self.assertEqual((target / "user-note.txt").read_text(), "preserve")
         self.assertFalse((target / "disk.qcow2").exists())
 
+    def test_setup_status_uses_the_newest_report_and_preserves_serial_fallback(self):
+        serial_report = {"state": "error", "phase": 2, "message": "Driver failed",
+                         "updated_at": "2026-11-09T20:00:00+00:00"}
+        (self.directory / "setup-events.jsonl").write_text(json.dumps(serial_report) + "\n")
+        fresh_report = {"state": "ready", "phase": 3, "updated_at": "2026-11-09T20:01:00+00:00"}
+        stale_report = {"state": "installing", "phase": 1, "updated_at": "2026-11-09T19:59:00+00:00"}
+        for report, expected in ((fresh_report, fresh_report), (stale_report, serial_report),
+                                 (OSError("agent unavailable"), serial_report)):
+            with self.subTest(report=report), \
+                 patch.object(self.backend, "_metadata", return_value={"vm_id": self.config.id}), \
+                 patch.object(self.backend, "_identity_matches", return_value=True), \
+                 patch.object(self.backend, "_runtime_dir", return_value=self.root / "runtime"), \
+                 patch("virtue.backends.guest_agent.GuestAgent") as guest_agent:
+                if isinstance(report, OSError):
+                    guest_agent.return_value.__enter__.side_effect = report
+                else:
+                    guest_agent.return_value.__enter__.return_value.setup_status.return_value = report
+                self.assertEqual(self.backend.setup_status(self.config.id), expected)
+
     def test_repair_replaces_setup_media_and_detaches_windows_installer_without_agent(self):
         repair_iso = self.directory / "virtue-repair.iso"
         repair_iso.write_bytes(b"updated repair media")

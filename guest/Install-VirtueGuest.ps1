@@ -4,6 +4,7 @@ param([switch]$Resume, [switch]$Repair)
 $ErrorActionPreference = 'Stop'
 $work = Join-Path $env:ProgramData 'Virtue'
 $statusPath = Join-Path $work 'setup-status.json'
+$installedAssetsPath = Join-Path $work 'installed-assets.json'
 $taskName = 'VirtueFinishSetup'
 
 function Write-Status([string]$state, [string]$message, [int]$phase, $report = $null) {
@@ -42,11 +43,13 @@ function Install-Driver([string]$inf, [int]$phase) {
     try {
         $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\pnputil.exe') -ArgumentList $command -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         $exitCode = $process.ExitCode
+        # ERROR_NO_MORE_ITEMS (259) includes retries where the driver is already current.
+        $driverSucceeded = $exitCode -in @(0, 259, 3010, 1641)
         $output = (@(Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue
                      Get-Content -LiteralPath $stderr -ErrorAction SilentlyContinue) -join [Environment]::NewLine).Trim()
         $logSaved = $false
         $setupLines = @()
-        if ($exitCode -notin @(0, 3010, 1641)) {
+        if (-not $driverSucceeded) {
             try {
                 $setupLines = @(Get-Content -LiteralPath (Join-Path $env:SystemRoot 'inf\setupapi.dev.log') -Tail 80 -ErrorAction Stop)
             } catch { Write-Warning 'Could not read the Windows driver log.' }
@@ -59,7 +62,7 @@ function Install-Driver([string]$inf, [int]$phase) {
                 $setupLines | Add-Content -LiteralPath $log -Encoding UTF8
             }
         } catch { Write-Warning 'Could not save the complete driver installation log.' }
-        if ($exitCode -notin @(0, 3010, 1641)) {
+        if (-not $driverSucceeded) {
             $details = if ($output) { $output.Substring(0, [Math]::Min($output.Length, 4000)) } else { 'PnPUtil returned no explanation.' }
             $errors = @($setupLines | Where-Object { $_ -match '^\s*!!!' })
             if (-not $errors.Count) { $errors = @($setupLines | Select-Object -Last 12) }
@@ -91,6 +94,29 @@ function Install-Virtio {
     $agent = Join-Path $root 'guest-agent\qemu-ga-x86_64.msi'
     Invoke-Installer 'msiexec.exe' @('/i', $agent, '/qn', '/norestart')
     Start-Service -Name 'QEMU-GA'
+}
+
+function Install-Yttrium {
+    $workRoot = [System.IO.Path]::GetFullPath($work).TrimEnd('\')
+    $drivers = [System.IO.Path]::GetFullPath((Join-Path $workRoot ('Drivers-' + [Guid]::NewGuid().ToString('N'))))
+    if ([System.IO.Path]::GetDirectoryName($drivers) -ne $workRoot) { throw 'The driver extraction path is invalid.' }
+    try {
+        Expand-Archive -LiteralPath (Join-Path $work 'YttriumDrivers.zip') -DestinationPath $drivers
+        $certificate = Get-ChildItem -LiteralPath $drivers -Recurse -Filter 'VirtIOTestCert.cer' | Select-Object -First 1
+        if (-not $certificate) { throw 'The verified Yttrium archive is missing its signing certificate.' }
+        Write-Status 'installing' 'Importing the Yttrium driver signing certificate…' 2
+        Import-Certificate -FilePath $certificate.FullName -CertStoreLocation 'Cert:\LocalMachine\Root' | Out-Null
+        Import-Certificate -FilePath $certificate.FullName -CertStoreLocation 'Cert:\LocalMachine\TrustedPublisher' | Out-Null
+        $infs = @(Get-ChildItem -LiteralPath $drivers -Recurse -Filter '*.inf' | Where-Object { $_.FullName -notmatch '\\(x86|i386|arm64)\\' })
+        if (-not $infs.Count) { throw 'The verified Yttrium archive is missing the x64 graphics driver.' }
+        Write-Status 'installing' 'Installing Yttrium graphics drivers…' 2
+        foreach ($inf in $infs) { Install-Driver $inf.FullName 2 }
+    } finally {
+        if (Test-Path -LiteralPath $drivers) {
+            try { Remove-Item -LiteralPath $drivers -Recurse -Force }
+            catch { Write-Warning 'Could not remove the temporary driver files.' }
+        }
+    }
 }
 
 function Register-Resume {
@@ -130,25 +156,37 @@ function Start-Resume {
 function Test-Graphics {
     $collector = Join-Path $work 'Collect-VirtueGpuReport.ps1'
     $output = Join-Path $work 'gpu-report.json'
+    $stderr = Join-Path $work 'gpu-probe.stderr.txt'
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$collector`" -OutputPath `"$output`""
+    $lastFailure = 'No successful graphics report was produced.'
     for ($attempt = 1; $attempt -le 12; $attempt++) {
         Write-Status 'installing' "Checking accelerated graphics ($attempt/12)…" 3
-        $probe = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Hidden -PassThru
+        [System.IO.File]::Delete($output)
+        $probe = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
         try {
             if (-not $probe.WaitForExit(45000)) {
-                $probe.Kill()
-                throw 'The graphics verification process stopped responding.'
-            }
-            if ($probe.ExitCode -eq 0 -and (Test-Path -LiteralPath $output)) {
-                $report = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json
-                if ($report.opengl.draw_test_passed -and $report.opengl.renderer -match 'zink.*Venus' -and $report.opengl.renderer -notmatch 'llvmpipe|lavapipe|softpipe') {
-                    return $report
+                try { $probe.Kill() } catch { if (-not $probe.HasExited) { throw } }
+                if (-not $probe.WaitForExit(5000)) { throw 'The graphics verification process could not be stopped.' }
+                $lastFailure = 'The graphics verification process timed out.'
+            } elseif ($probe.ExitCode -ne 0) {
+                $detail = (Get-Content -LiteralPath $stderr -Tail 12 -ErrorAction SilentlyContinue) -join [Environment]::NewLine
+                $lastFailure = "The graphics verification process failed (exit $($probe.ExitCode)). $detail"
+            } else {
+                try {
+                    $report = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json
+                    $renderer = [string]$report.opengl.renderer
+                    if ($report.opengl.draw_test_passed -eq $true -and $renderer -match 'zink' -and $renderer -match 'venus' -and $renderer -notmatch 'llvmpipe|lavapipe|swiftshader|Microsoft Basic Render|GDI Generic|software rasterizer') {
+                        return $report
+                    }
+                    $lastFailure = "The graphics report did not pass the hardware rendering check (renderer: $($report.opengl.renderer))."
+                } catch {
+                    $lastFailure = "The graphics report could not be read: $($_.Exception.Message)"
                 }
             }
         } finally { $probe.Dispose() }
-        Start-Sleep -Seconds 5
+        if ($attempt -lt 12) { Start-Sleep -Seconds 5 }
     }
-    throw 'The graphics driver did not pass its hardware rendering check.'
+    throw "The graphics driver did not pass its hardware rendering check. $lastFailure"
 }
 
 $phase = 1
@@ -174,6 +212,11 @@ try {
     }
     if ($phase -notin @(1, 2, 3)) { throw 'The saved Windows setup phase is invalid.' }
     if (-not $Resume) {
+        $installedHashes = $null
+        if ($Repair -and $phase -eq 3 -and (Test-Path -LiteralPath $installedAssetsPath)) {
+            try { $installedHashes = Get-Content -LiteralPath $installedAssetsPath -Raw | ConvertFrom-Json }
+            catch { Write-Warning 'Could not read the installed component checksums; graphics components will be reinstalled.' }
+        }
         if ($Repair) {
             Write-Status 'installing' 'Updating the setup components for the existing Windows installation…' $phase
         } else {
@@ -187,6 +230,9 @@ try {
             if ((Get-FileHash -LiteralPath (Join-Path $work $asset[0]) -Algorithm SHA256).Hash -ne $asset[1]) {
                 throw 'A required driver download failed verification.'
             }
+        }
+        if ($Repair -and $phase -eq 3 -and ($installedHashes.guest -ne $hashes.guest -or $installedHashes.vulkan -ne $hashes.vulkan)) {
+            $phase = 2
         }
         Enable-AutomaticLogon
         Register-Resume
@@ -207,20 +253,14 @@ try {
         Restart-Computer -Force
     } elseif ($phase -eq 2) {
         Write-Status 'installing' 'Installing Yttrium graphics and the Vulkan runtime…' 2
-        $drivers = Join-Path $work 'Drivers'
-        Expand-Archive -LiteralPath (Join-Path $work 'YttriumDrivers.zip') -DestinationPath $drivers -Force
-        $certificate = Get-ChildItem -LiteralPath $drivers -Recurse -Filter 'VirtIOTestCert.cer' | Select-Object -First 1
-        if (-not $certificate) { throw 'The verified Yttrium archive is missing its signing certificate.' }
-        Write-Status 'installing' 'Importing the Yttrium driver signing certificate…' 2
-        Import-Certificate -FilePath $certificate.FullName -CertStoreLocation 'Cert:\LocalMachine\Root' | Out-Null
-        Import-Certificate -FilePath $certificate.FullName -CertStoreLocation 'Cert:\LocalMachine\TrustedPublisher' | Out-Null
-        $infs = @(Get-ChildItem -LiteralPath $drivers -Recurse -Filter '*.inf' | Where-Object { $_.FullName -notmatch '\\(x86|i386|arm64)\\' })
-        if (-not $infs.Count) { throw 'The verified Yttrium archive is missing the x64 graphics driver.' }
-        Write-Status 'installing' 'Installing Yttrium graphics drivers…' 2
-        foreach ($inf in $infs) { Install-Driver $inf.FullName 2 }
+        Install-Yttrium
         Write-Status 'installing' 'Installing the Vulkan runtime…' 2
-        $installer = Start-Process -FilePath (Join-Path $work 'VulkanRT.exe') -ArgumentList '/S' -Wait -PassThru
+        $installer = Start-Process -FilePath (Join-Path $work 'VulkanRT.exe') -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
         if ($installer.ExitCode -notin @(0, 3010)) { throw 'The Vulkan runtime did not install successfully.' }
+        # Record installed versions only after both installers have succeeded.
+        $hashes = Get-Content -LiteralPath (Join-Path $work 'asset-checksums.json') -Raw | ConvertFrom-Json
+        @{ guest=$hashes.guest; vulkan=$hashes.vulkan } | ConvertTo-Json | Set-Content -LiteralPath ($installedAssetsPath + '.tmp') -Encoding UTF8
+        Move-Item -LiteralPath ($installedAssetsPath + '.tmp') -Destination $installedAssetsPath -Force
         Write-Status 'installing' 'Checking accelerated graphics after restart…' 3
         Restart-Computer -Force
     } elseif ($phase -eq 3) {

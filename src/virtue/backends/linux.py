@@ -566,22 +566,34 @@ class LinuxBackend:
         if not metadata or not self._identity_matches(metadata):
             return None
         journal = self._directory(vm_id) / "setup-events.jsonl"
-        if journal.is_file() and not journal.is_symlink():
-            with journal.open("rb") as stream:
-                stream.seek(max(0, journal.stat().st_size - 256 * 1024))
-                lines = stream.read(256 * 1024).splitlines()
-            for line in reversed(lines):
-                try:
-                    value = json.loads(line.decode("utf-8-sig"))
-                    if isinstance(value, dict) and value.get("state") in {"installing", "ready", "error"}:
-                        return value
-                except (ValueError, UnicodeError):
-                    continue
+        serial_status = None
+        try:
+            if journal.is_file() and not journal.is_symlink():
+                with journal.open("rb") as stream:
+                    stream.seek(max(0, journal.stat().st_size - 256 * 1024))
+                    lines = stream.read(256 * 1024).splitlines()
+                for line in reversed(lines):
+                    try:
+                        value = json.loads(line.decode("utf-8-sig"))
+                        if isinstance(value, dict) and value.get("state") in {"installing", "ready", "error"}:
+                            serial_status = value
+                            break
+                    except (ValueError, UnicodeError):
+                        continue
+        except OSError:
+            pass
         try:
             with GuestAgent(self._runtime_dir(vm_id) / "qga.sock") as agent:
-                return agent.setup_status()
+                guest_status = agent.setup_status()
         except (OSError, ValueError, KeyError, TypeError):
-            return {"state": "installing", "message": "Installing Windows and its integration drivers…"}
+            return serial_status or {"state": "installing", "message": "Installing Windows and its integration drivers…"}
+        if serial_status is not None:
+            try:
+                if datetime.fromisoformat(serial_status["updated_at"]) > datetime.fromisoformat(guest_status["updated_at"]):
+                    return serial_status
+            except (KeyError, TypeError, ValueError):
+                pass
+        return guest_status
 
     def _replace_setup_media(self, client: QMPClient, repair_iso: Path):
         devices = {item.get("device") for item in client.execute("query-block")}

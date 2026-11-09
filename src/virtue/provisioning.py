@@ -107,12 +107,12 @@ def prepare_windows(config, directory: Path, assets: dict[str, Path], progress=l
     credentials = directory / "windows-credentials.json"
     if target.is_symlink() or credentials.is_symlink():
         raise ValidationError("Automatic installation files must not be symbolic links.")
+    config.drivers_iso_path = str(assets["virtio"])
     if target.is_file() and credentials.is_file():
         return
     progress("Reading your Windows ISO and choosing its installation defaults…")
     image = inspect_windows_iso(Path(config.iso_path), directory)
     config.windows_version = image["windows_version"]
-    config.drivers_iso_path = str(assets["virtio"])
     if credentials.is_file():
         password = json.loads(credentials.read_text(encoding="utf-8"))["password"]
     else:
