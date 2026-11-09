@@ -5,20 +5,23 @@ $ErrorActionPreference = 'Stop'
 $work = Join-Path $env:ProgramData 'Virtue'
 $statusPath = Join-Path $work 'setup-status.json'
 $taskName = 'VirtueFinishSetup'
-New-Item -ItemType Directory -Path $work -Force | Out-Null
 
 function Write-Status([string]$state, [string]$message, [int]$phase, $report = $null) {
     $value = @{ state=$state; message=$message; phase=$phase; graphics_report=$report }
-    $value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath ($statusPath + '.tmp') -Encoding UTF8
-    Move-Item -LiteralPath ($statusPath + '.tmp') -Destination $statusPath -Force
-    # The built-in serial device reports failures even before QGA is installed.
-    $port = [System.IO.Ports.SerialPort]::new('COM1', 115200)
     try {
-        $port.Encoding = [System.Text.UTF8Encoding]::new($false)
-        $port.WriteTimeout = 10000
-        $port.Open()
-        $port.WriteLine(($value | ConvertTo-Json -Depth 20 -Compress))
-    } catch { } finally { $port.Dispose() }
+        New-Item -ItemType Directory -Path $work -Force | Out-Null
+        $value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath ($statusPath + '.tmp') -Encoding UTF8
+        Move-Item -LiteralPath ($statusPath + '.tmp') -Destination $statusPath -Force
+    } finally {
+        # Report over serial even if saving the status file fails.
+        $port = [System.IO.Ports.SerialPort]::new('COM1', 115200)
+        try {
+            $port.Encoding = [System.Text.UTF8Encoding]::new($false)
+            $port.WriteTimeout = 10000
+            $port.Open()
+            $port.WriteLine(($value | ConvertTo-Json -Depth 20 -Compress))
+        } catch { } finally { $port.Dispose() }
+    }
 }
 
 function Invoke-Installer([string]$file, [string[]]$arguments) {
@@ -81,9 +84,23 @@ function Test-Graphics {
 
 $phase = 1
 try {
+    $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        try {
+            if ($Resume) { $phase = (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).phase }
+            Write-Status 'installing' 'Waiting for administrator approval inside Windows…' $phase
+        } catch {
+            Write-Warning 'Could not report the administrator prompt; requesting elevation anyway.'
+        }
+        $arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+        if ($Resume) { $arguments += ' -Resume' }
+        $elevated = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
+        exit $elevated.ExitCode
+    }
     if ($Resume) {
         $phase = (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).phase
-    } else {
+    }
+    if (-not $Resume) {
         Write-Status 'installing' 'Installing Windows integration drivers…' 1
         foreach ($name in @('Install-VirtueGuest.ps1', 'Collect-VirtueGpuReport.ps1', 'windows-account.json', 'asset-checksums.json', 'YttriumDrivers.zip', 'VulkanRT.exe')) {
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $work $name) -Force
@@ -111,11 +128,14 @@ try {
         Expand-Archive -LiteralPath (Join-Path $work 'YttriumDrivers.zip') -DestinationPath $drivers -Force
         $certificate = Get-ChildItem -LiteralPath $drivers -Recurse -Filter 'VirtIOTestCert.cer' | Select-Object -First 1
         if (-not $certificate) { throw 'The verified Yttrium archive is missing its signing certificate.' }
+        Write-Status 'installing' 'Importing the Yttrium driver signing certificate…' 2
         Import-Certificate -FilePath $certificate.FullName -CertStoreLocation 'Cert:\LocalMachine\Root' | Out-Null
         Import-Certificate -FilePath $certificate.FullName -CertStoreLocation 'Cert:\LocalMachine\TrustedPublisher' | Out-Null
         $infs = @(Get-ChildItem -LiteralPath $drivers -Recurse -Filter '*.inf' | Where-Object { $_.FullName -notmatch '\\(x86|i386|arm64)\\' })
         if (-not $infs.Count) { throw 'The verified Yttrium archive is missing the x64 graphics driver.' }
+        Write-Status 'installing' 'Installing Yttrium graphics drivers…' 2
         foreach ($inf in $infs) { Invoke-Installer 'pnputil.exe' @('/add-driver', $inf.FullName, '/install') }
+        Write-Status 'installing' 'Installing the Vulkan runtime…' 2
         $installer = Start-Process -FilePath (Join-Path $work 'VulkanRT.exe') -ArgumentList '/S' -Wait -PassThru
         if ($installer.ExitCode -notin @(0, 3010)) { throw 'The Vulkan runtime did not install successfully.' }
         Write-Status 'installing' 'Checking accelerated graphics after restart…' 3
@@ -134,7 +154,15 @@ try {
         Write-Status 'ready' 'Windows and accelerated graphics are ready.' 3 $report
     } else { throw 'The automatic installation state is invalid.' }
 } catch {
-    Write-Status 'error' $_.Exception.Message $phase
+    $failure = $_
+    $message = $failure.Exception.Message
+    if ($failure.InvocationInfo.MyCommand.Name) {
+        $message = '{0}: {1}' -f $failure.InvocationInfo.MyCommand.Name, $message
+    }
+    if ($failure.InvocationInfo.ScriptLineNumber -gt 0) {
+        $message += ' (guest setup line {0})' -f $failure.InvocationInfo.ScriptLineNumber
+    }
+    Write-Status 'error' $message $phase
     if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
         Disable-ScheduledTask -TaskName $taskName | Out-Null
     }

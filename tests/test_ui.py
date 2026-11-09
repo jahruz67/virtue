@@ -1,6 +1,7 @@
 """Offscreen Qt checks. Service fakes exercise UI wiring, not a hypervisor."""
 
 import os
+from threading import Event
 import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -9,7 +10,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 from PySide6.QtCore import QThread
-from PySide6.QtWidgets import QApplication, QDialog, QPushButton
+from PySide6.QtWidgets import QApplication, QDialog, QProgressBar, QPushButton
 
 from virtue.ui import MainWindow
 from virtue.ui.dialogs import VMDialog, diagnostics_html
@@ -68,6 +69,64 @@ def test_launch_button_uses_background_service_and_safe_mode(app):
     wait_for_idle(app, window)
     assert service.calls[-1] == ("start", "vm-test", True)
     window.close()
+
+
+def test_status_poll_stays_interactive_and_queues_user_actions(app):
+    service, window = ready_window(app)
+    release_poll = Event()
+    original_card = window.cards_layout.itemAt(0).widget()
+
+    def list_vms():
+        if not release_poll.wait(timeout=3):
+            raise TimeoutError("The test did not release the status poll")
+        return [dict(VM)]
+
+    service.list_vms = list_vms
+    try:
+        window.refresh_list(quiet=True)
+        assert window.tasks.busy
+        assert not window.tasks.blocking_busy
+        assert not window.findChildren(QProgressBar)
+        assert window.diagnostics_button.isEnabled()
+        assert window.cards.isEnabled()
+        window.start_vm(VM)
+        assert window.tasks.blocking_busy
+        assert not window.cards.isEnabled()
+    finally:
+        release_poll.set()
+        wait_for_idle(app, window)
+        window.close()
+    assert service.calls == [("start", "vm-test", False)]
+    assert window.cards_layout.itemAt(0).widget() is original_card
+
+
+@pytest.mark.parametrize("state, installed, setup_state", [
+    ("running", True, "ready"),
+    ("running", False, "error"),
+    ("stopped", False, "installing"),
+    ("paused", False, "installing"),
+])
+def test_installation_keeps_controls_locked_until_setup_finishes_or_needs_attention(app, state, installed, setup_state):
+    service, window = ready_window(app)
+    vm = {**VM, "auto_setup": True, "installed": False, "state": "running",
+          "setup": {"state": "installing", "phase": 1}}
+    try:
+        window.render_vms([vm])
+        window._busy_changed(False)
+        assert not window.diagnostics_button.isEnabled()
+        assert not window.cards.isEnabled()
+        assert not window.create_button.isEnabled()
+        assert all(bar.objectName() == "setupProgress" for bar in window.findChildren(QProgressBar))
+        window.start_vm(vm)
+        assert service.calls == []
+        window.render_vms([{**vm, "state": state, "installed": installed, "setup": {"state": setup_state}}])
+        assert window.diagnostics_button.isEnabled()
+        assert window.cards.isEnabled()
+        assert window.create_button.isEnabled()
+        assert all(bar.objectName() == "setupProgress" for bar in window.findChildren(QProgressBar))
+    finally:
+        window.confirm = lambda *_args, **_kwargs: True
+        window.close()
 
 
 def test_missing_host_disables_creation_and_launch(app):

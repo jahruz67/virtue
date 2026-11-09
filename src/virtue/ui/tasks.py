@@ -44,17 +44,24 @@ class Tasks(QObject):
     def busy(self):
         return bool(self._pending)
 
-    def submit(self, fn: Callable, success: Callable, failure: Callable):
+    @property
+    def blocking_busy(self):
+        return any(blocking for _, _, _, blocking in self._pending.values())
+
+    def submit(self, fn: Callable, success: Callable, failure: Callable, *, blocking=True):
+        was_blocking = self.blocking_busy
         number = next(self._counter)
         work = _Work(number, fn)
-        self._pending[number] = (work, success, failure)
+        self._pending[number] = (work, success, failure, blocking)
         work.signals.completed.connect(self._complete)
-        self.changed.emit(True)
+        if self.blocking_busy != was_blocking:
+            self.changed.emit(self.blocking_busy)
         self.pool.start(work)
 
     @Slot(int, object, object)
     def _complete(self, number, result, error):
-        _, success, failure = self._pending.pop(number)
+        was_blocking = self.blocking_busy
+        _work, success, failure, _blocking = self._pending.pop(number)
         try:
             if error is None:
                 success(result)
@@ -63,4 +70,5 @@ class Tasks(QObject):
         except Exception as callback_error:
             failure(callback_error)
         finally:
-            self.changed.emit(self.busy)
+            if self.blocking_busy != was_blocking:
+                self.changed.emit(self.blocking_busy)

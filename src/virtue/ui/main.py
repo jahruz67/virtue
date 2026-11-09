@@ -89,11 +89,6 @@ class MainWindow(QMainWindow):
         self.repair_button.hide()
         banner_layout.addWidget(self.repair_button)
         root.addWidget(self.banner)
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
-        self.progress.setTextVisible(False)
-        self.progress.hide()
-        root.addWidget(self.progress)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         self.cards = QWidget()
@@ -123,12 +118,20 @@ class MainWindow(QMainWindow):
             self.render_vms([])
 
     def _busy_changed(self, busy):
-        self.progress.setVisible(busy)
-        self.create_button.setEnabled(not busy and bool(self.host.get("ready")))
-        self.import_button.setEnabled(not busy)
-        self.diagnostics_button.setEnabled(not busy)
-        self.cards.setEnabled(not busy)
-        self.repair_button.setEnabled(not busy)
+        locked = busy or self._installation_running()
+        self.create_button.setEnabled(not locked and bool(self.host.get("ready")))
+        self.import_button.setEnabled(not locked)
+        self.diagnostics_button.setEnabled(not locked)
+        self.cards.setEnabled(not locked)
+        self.repair_button.setEnabled(not locked)
+
+    def _installation_running(self):
+        return any(
+            vm.get("auto_setup") and not vm.get("installed", False)
+            and vm.get("state") in {"running", "starting", "shutdown"}
+            and vm.get("setup", {}).get("state") != "error"
+            for vm in self.vms
+        )
 
     def _setup_progress(self, message):
         self.banner_text.setText(message)
@@ -146,7 +149,7 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Unable to complete this action", message)
 
     def _perform(self, message, fn, success=None, *, refresh=True, failure=None):
-        if self.tasks.busy:
+        if self.tasks.blocking_busy or self._installation_running():
             return
         self.statusBar().showMessage(message)
 
@@ -160,7 +163,7 @@ class MainWindow(QMainWindow):
         self.tasks.submit(fn, complete, failure or self._error)
 
     def _poll(self):
-        if not self.tasks.busy and QApplication.activeModalWidget() is None:
+        if not self.tasks.busy and QApplication.activeModalWidget() is None and QApplication.activePopupWidget() is None:
             self.refresh_list(quiet=True)
 
     def refresh_all(self):
@@ -184,6 +187,12 @@ class MainWindow(QMainWindow):
         if self.tasks.busy:
             return
 
+        def updated(vms):
+            if self.tasks.blocking_busy or QApplication.activeModalWidget() is not None or QApplication.activePopupWidget() is not None:
+                return
+            if vms != self.vms:
+                self.render_vms(vms)
+
         def failure(error):
             # A disconnected VM should not generate a modal alert every four seconds.
             if quiet:
@@ -191,7 +200,8 @@ class MainWindow(QMainWindow):
             else:
                 self._error(error)
 
-        self.tasks.submit(self.service.list_vms, self.render_vms, failure)
+        # Polls share the serial task queue without flashing the global busy UI.
+        self.tasks.submit(self.service.list_vms, updated, failure, blocking=False)
 
     def render_host(self):
         if self.host.get("ready"):
@@ -204,7 +214,7 @@ class MainWindow(QMainWindow):
             self.banner.setObjectName("warning")
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
-        self.create_button.setEnabled(bool(self.host.get("ready")) and not self.tasks.busy)
+        self._busy_changed(self.tasks.blocking_busy)
         self.repair_button.setVisible(not bool(self.host.get("ready")))
 
     def render_vms(self, vms):
@@ -233,6 +243,7 @@ class MainWindow(QMainWindow):
         for vm in vms:
             self.cards_layout.addWidget(self.vm_card(vm))
         self.cards_layout.addStretch()
+        self._busy_changed(self.tasks.blocking_busy)
 
     def vm_card(self, vm):
         card = QFrame()
