@@ -6,18 +6,29 @@ if ($env:OS -ne 'Windows_NT') { throw 'Run this collector inside the Windows gue
 
 Add-Type -ReferencedAssemblies System.Windows.Forms,System.Drawing -TypeDefinition @'
 using System;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 public static class VirtueGlProbe {
+  sealed class ProbeWindow : Form {
+    protected override CreateParams CreateParams {
+      get {
+        CreateParams parameters = base.CreateParams;
+        parameters.ClassStyle |= 0x20; // CS_OWNDC: keep the WGL window's device context stable.
+        return parameters;
+      }
+    }
+  }
   [StructLayout(LayoutKind.Sequential)] struct PFD {
     public ushort size,version; public uint flags; public byte pixelType,colorBits,redBits,redShift,greenBits,greenShift,blueBits,blueShift,alphaBits,alphaShift,accumBits,accumRedBits,accumGreenBits,accumBlueBits,accumAlphaBits,depthBits,stencilBits,auxBuffers,layerType,reserved; public uint layerMask,visibleMask,damageMask;
   }
-  [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr h);
+  [DllImport("user32.dll", SetLastError=true)] static extern IntPtr GetDC(IntPtr h);
   [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr h,IntPtr dc);
-  [DllImport("gdi32.dll")] static extern int ChoosePixelFormat(IntPtr dc,ref PFD pfd);
-  [DllImport("gdi32.dll")] static extern bool SetPixelFormat(IntPtr dc,int pf,ref PFD pfd);
-  [DllImport("opengl32.dll")] static extern IntPtr wglCreateContext(IntPtr dc);
-  [DllImport("opengl32.dll")] static extern bool wglMakeCurrent(IntPtr dc,IntPtr rc);
+  [DllImport("gdi32.dll", SetLastError=true)] static extern int ChoosePixelFormat(IntPtr dc,ref PFD pfd);
+  [DllImport("gdi32.dll", SetLastError=true)] static extern int DescribePixelFormat(IntPtr dc,int pf,uint size,ref PFD pfd);
+  [DllImport("gdi32.dll", SetLastError=true)] static extern bool SetPixelFormat(IntPtr dc,int pf,ref PFD pfd);
+  [DllImport("opengl32.dll", SetLastError=true)] static extern IntPtr wglCreateContext(IntPtr dc);
+  [DllImport("opengl32.dll", SetLastError=true)] static extern bool wglMakeCurrent(IntPtr dc,IntPtr rc);
   [DllImport("opengl32.dll")] static extern bool wglDeleteContext(IntPtr rc);
   [DllImport("opengl32.dll")] static extern IntPtr glGetString(uint name);
   [DllImport("opengl32.dll")] static extern void glViewport(int x,int y,int width,int height);
@@ -30,18 +41,30 @@ public static class VirtueGlProbe {
   [DllImport("opengl32.dll")] static extern void glFinish();
   [DllImport("opengl32.dll")] static extern uint glGetError();
   [DllImport("opengl32.dll")] static extern void glReadPixels(int x,int y,int w,int h,uint format,uint type,[Out] byte[] bytes);
+  static Exception Failure(string operation) {
+    int code = Marshal.GetLastWin32Error();
+    string detail = code == 0 ? "Windows supplied no error code." : new Win32Exception(code).Message;
+    return new InvalidOperationException(operation + " failed (Win32 " + code + "): " + detail);
+  }
   public static object Run() {
-    using (Form form = new Form()) {
+    using (Form form = new ProbeWindow()) {
       form.ClientSize = new System.Drawing.Size(64,64);
       form.Text = "Virtue OpenGL probe";
       form.Show(); Application.DoEvents();
       IntPtr handle = form.Handle, dc = GetDC(handle), rc = IntPtr.Zero;
+      if(dc==IntPtr.Zero) throw Failure("GetDC");
       try {
         PFD pfd = new PFD(); pfd.size=(ushort)Marshal.SizeOf(typeof(PFD)); pfd.version=1;
-        pfd.flags=0x24; pfd.colorBits=32; pfd.depthBits=24;
+        // PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER.
+        pfd.flags=0x25; pfd.colorBits=32; pfd.depthBits=24;
         int pf=ChoosePixelFormat(dc,ref pfd);
-        if(pf==0 || !SetPixelFormat(dc,pf,ref pfd)) throw new Exception("No OpenGL pixel format.");
-        rc=wglCreateContext(dc); if(rc==IntPtr.Zero || !wglMakeCurrent(dc,rc)) throw new Exception("Cannot create OpenGL context.");
+        if(pf==0) throw Failure("ChoosePixelFormat");
+        if(DescribePixelFormat(dc,pf,pfd.size,ref pfd)==0) throw Failure("DescribePixelFormat");
+        if(!SetPixelFormat(dc,pf,ref pfd)) throw Failure("SetPixelFormat");
+        string format = " (pixel format " + pf + ", flags 0x" + pfd.flags.ToString("X") + ")";
+        rc=wglCreateContext(dc);
+        if(rc==IntPtr.Zero) throw Failure("wglCreateContext" + format);
+        if(!wglMakeCurrent(dc,rc)) throw Failure("wglMakeCurrent" + format);
         string vendor=Marshal.PtrToStringAnsi(glGetString(0x1F00));
         string renderer=Marshal.PtrToStringAnsi(glGetString(0x1F01));
         string version=Marshal.PtrToStringAnsi(glGetString(0x1F02));
@@ -49,14 +72,14 @@ public static class VirtueGlProbe {
         glColor3f(0,1,0); glBegin(4); glVertex2f(-1,-1); glVertex2f(1,-1); glVertex2f(0,1); glEnd();
         glFinish(); byte[] pixel=new byte[4]; glReadPixels(32,24,1,1,0x1908,0x1401,pixel);
         uint error=glGetError(); bool pass=error==0 && pixel[0]<5 && pixel[1]>250 && pixel[2]<5;
-        return new { vendor=vendor,renderer=renderer,version=version,draw_test_passed=pass,gl_error=error,pixel=pixel,procedure="64x64 OpenGL triangle draw, finish and pixel readback" };
+        return new { vendor=vendor,renderer=renderer,version=version,draw_test_passed=pass,gl_error=error,pixel=pixel,pixel_format=new { index=pf,flags=pfd.flags,color_bits=pfd.colorBits,depth_bits=pfd.depthBits },procedure="64x64 OpenGL triangle draw, finish and pixel readback" };
       } finally { wglMakeCurrent(IntPtr.Zero,IntPtr.Zero); if(rc!=IntPtr.Zero) wglDeleteContext(rc); ReleaseDC(handle,dc); }
     }
   }
 }
 '@
 
-$opengl = try { [VirtueGlProbe]::Run() } catch { @{ error=$_.Exception.Message; draw_test_passed=$false } }
+$opengl = try { [VirtueGlProbe]::Run() } catch { @{ error=$_.Exception.GetBaseException().Message; draw_test_passed=$false } }
 $vulkan = @{ output=''; devices=@(); error='vulkaninfo is not installed; install the Vulkan Runtime/SDK tools in the guest.' }
 $vk = Get-Command vulkaninfo -ErrorAction SilentlyContinue
 if ($vk) {
