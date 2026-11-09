@@ -57,10 +57,11 @@ jobs:
         run: python tools/build_deb.py
 
       - name: Inspect Debian package
+        working-directory: dist
         run: |
-          dpkg-deb --info dist/virtue-desktop_0.1.0_amd64.deb
-          dpkg-deb --contents dist/virtue-desktop_0.1.0_amd64.deb
-          sha256sum --check dist/virtue-desktop_0.1.0_amd64.deb.sha256
+          dpkg-deb --info virtue-desktop_0.1.0_amd64.deb
+          dpkg-deb --contents virtue-desktop_0.1.0_amd64.deb
+          sha256sum --check virtue-desktop_0.1.0_amd64.deb.sha256
 
       - name: Upload Debian package and checksum
         uses: actions/upload-artifact@v4
