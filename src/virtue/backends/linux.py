@@ -7,7 +7,7 @@ and process ownership before issuing lifecycle operations.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import base64
@@ -625,9 +625,19 @@ class LinuxBackend:
                        "} while (-not $media -and [DateTime]::UtcNow -lt $deadline); "
                        "if (-not $media) { throw 'Updated Virtue setup media is not ready. Wait for Windows to detect the disc and retry.' }; "
                        "& (Join-Path $media.RootDirectory.FullName 'Install-VirtueGuest.ps1') -Repair")
-        with GuestAgent(self._runtime_dir(vm_id) / "qga.sock") as agent:
+        with ExitStack() as stack:
+            deadline = time.monotonic() + 120
+            while True:
+                try:
+                    agent = stack.enter_context(GuestAgent(self._runtime_dir(vm_id) / "qga.sock"))
+                    break
+                except (OSError, ValueError):
+                    if not repair or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(1)
             process = agent.execute("guest-exec", {"path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-                                    "arg": ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", command], "capture-output": True})
+                                    "arg": ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                                            "-ExecutionPolicy", "Bypass", "-Command", command], "capture-output": True})
             deadline = time.monotonic() + (120 if repair else 5)
             while time.monotonic() < deadline:
                 result = agent.execute("guest-exec-status", {"pid": process["pid"]})

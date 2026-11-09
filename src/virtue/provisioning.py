@@ -116,7 +116,7 @@ def prepare_windows(config, directory: Path, assets: dict[str, Path], progress=l
     if credentials.is_file():
         password = json.loads(credentials.read_text(encoding="utf-8"))["password"]
     else:
-        password = "V!" + secrets.token_urlsafe(24)
+        password = "V!" + secrets.token_urlsafe(6)
         atomic_json(credentials, {"username": "Virtue", "password": password})
     progress("Preparing automatic Windows and driver installation…")
     _write_setup_media(target, credentials, assets, answer_file(config, image, password))

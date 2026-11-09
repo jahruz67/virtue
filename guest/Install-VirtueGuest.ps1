@@ -101,6 +101,32 @@ function Register-Resume {
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
 }
 
+function Enable-AutomaticLogon {
+    # Setup retries can use more logons than the answer file's initial allowance.
+    $logon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    $account = Get-Content -LiteralPath (Join-Path $work 'windows-account.json') -Raw | ConvertFrom-Json
+    Set-ItemProperty -LiteralPath $logon -Name DefaultUserName -Value $account.username
+    Set-ItemProperty -LiteralPath $logon -Name DefaultPassword -Value $account.password
+    Set-ItemProperty -LiteralPath $logon -Name DefaultDomainName -Value $env:COMPUTERNAME
+    Remove-ItemProperty -LiteralPath $logon -Name AutoLogonCount -ErrorAction SilentlyContinue
+    Set-ItemProperty -LiteralPath $logon -Name AutoAdminLogon -Value '1'
+}
+
+function Start-Resume {
+    $previousStatus = Get-Content -LiteralPath $statusPath -Raw
+    Start-ScheduledTask -TaskName $taskName
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    do {
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($task -and $task.State -eq 'Running') { return }
+        # A fast task can finish and unregister itself between scheduler queries.
+        $status = Get-Content -LiteralPath $statusPath -Raw -ErrorAction SilentlyContinue
+        if ($status -and $status -ne $previousStatus) { return }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'Windows did not start the setup task. Sign in to Windows as Virtue and retry automatic setup.'
+}
+
 function Test-Graphics {
     $collector = Join-Path $work 'Collect-VirtueGpuReport.ps1'
     $output = Join-Path $work 'gpu-report.json'
@@ -162,10 +188,11 @@ try {
                 throw 'A required driver download failed verification.'
             }
         }
+        Enable-AutomaticLogon
         Register-Resume
         if ($Repair) {
             Write-Status 'installing' 'Resuming Windows setup with updated components…' $phase
-            Start-ScheduledTask -TaskName $taskName
+            Start-Resume
             exit 0
         }
     }
@@ -199,13 +226,7 @@ try {
     } elseif ($phase -eq 3) {
         $report = Test-Graphics
         # Keep this private VM opening directly into its generated Windows account.
-        $logon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
-        $account = Get-Content -LiteralPath (Join-Path $work 'windows-account.json') -Raw | ConvertFrom-Json
-        Set-ItemProperty -LiteralPath $logon -Name DefaultUserName -Value $account.username
-        Set-ItemProperty -LiteralPath $logon -Name DefaultPassword -Value $account.password
-        Set-ItemProperty -LiteralPath $logon -Name DefaultDomainName -Value $env:COMPUTERNAME
-        Remove-ItemProperty -LiteralPath $logon -Name AutoLogonCount -ErrorAction SilentlyContinue
-        Set-ItemProperty -LiteralPath $logon -Name AutoAdminLogon -Value '1'
+        Enable-AutomaticLogon
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
         Write-Status 'ready' 'Windows and accelerated graphics are ready.' 3 $report
     } else { throw 'The automatic installation state is invalid.' }
