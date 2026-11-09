@@ -50,15 +50,16 @@ def tar_bytes(directory: Path) -> bytes:
     with gzip.GzipFile(fileobj=result, mode="wb", mtime=0) as compressed:
         with tarfile.open(fileobj=compressed, mode="w") as archive:
             for path in sorted(directory.rglob("*")):
-                if path.is_dir():
-                    continue
                 info = archive.gettarinfo(str(path), arcname="./" + path.relative_to(directory).as_posix())
                 info.uid = info.gid = 0
                 info.uname = info.gname = "root"
                 info.mtime = 0
-                info.mode = 0o755 if path.name == "virtue" else 0o644
-                with path.open("rb") as stream:
-                    archive.addfile(info, stream)
+                info.mode = 0o755 if info.isdir() or path.name == "virtue" else 0o644
+                if info.isdir():
+                    archive.addfile(info)
+                else:
+                    with path.open("rb") as stream:
+                        archive.addfile(info, stream)
     return result.getvalue()
 
 

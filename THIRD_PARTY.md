@@ -5,6 +5,8 @@ components rather than incorporating their source or distributing Windows media.
 The DEB bundles the official PySide6 Essentials/shiboken6 Linux wheels unchanged
 except unpacking them into an application-private import directory. Their license
 texts remain included in the wheel `.dist-info` and Qt license directories.
+The Fedora RPM uses distribution-provided PySide6/Qt instead of bundling these
+wheels; the distribution packages supply their own licenses and source material.
 
 * Qt 6 / PySide6 / shiboken6: LGPLv3/GPLv3/commercial terms as applicable. Qt is
   dynamically linked, with no restriction in Virtue against replacing or debugging

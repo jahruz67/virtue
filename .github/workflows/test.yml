@@ -1,5 +1,7 @@
 name: Test and package
 on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
 jobs:
   test:
     strategy:
@@ -24,8 +26,57 @@ jobs:
       - name: Build DEB
         if: runner.os == 'Linux'
         run: python tools/build_deb.py
+      - name: Install RPM builder
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+      - name: Build Fedora RPM
+        if: runner.os == 'Linux'
+        run: python tools/build_rpm.py
+      - name: Inspect Fedora RPM
+        if: runner.os == 'Linux'
+        working-directory: dist
+        run: |
+          rpm -qpi ./*.rpm
+          rpm -qpl ./*.rpm
+          rpm -qp --requires ./*.rpm
+          sha256sum --check ./*.rpm.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: virtue-${{ runner.os }}
           path: dist/
+
+  release:
+    name: Publish release packages
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Download Linux release packages
+        uses: actions/download-artifact@v4
+        with:
+          name: virtue-Linux
+          path: dist
+
+      - name: Publish packages to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          assets=(dist/*.whl dist/*.tar.gz dist/*.deb dist/*.deb.sha256 dist/*.rpm dist/*.rpm.sha256)
+          for asset in "${assets[@]}"; do
+            test -f "$asset" || { echo "Missing release asset: $asset" >&2; exit 1; }
+          done
+          (cd dist && sha256sum --check ./*.deb.sha256 ./*.rpm.sha256)
+          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes \
+              --title "Virtue $RELEASE_TAG" --prerelease "${assets[@]}"
+          else
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          fi
 

@@ -35,6 +35,13 @@ Never run the desktop as root. The app's **Host diagnostics** shows missing
 dependencies and permissions. See [build and packaging](docs/build.md) for Fedora,
 native DEB packaging, headless diagnostics, and reproducible builds.
 
+Tagged GitHub prereleases provide an amd64 DEB for Ubuntu/Debian and an x86_64 RPM
+for Fedora, with SHA-256 checksums. Install a downloaded package with
+`sudo apt install ./virtue-desktop_0.1.0_amd64.deb` or
+`sudo dnf install ./virtue-desktop-0.1.0-1.x86_64.rpm`. The RPM uses Fedora's
+system Python and PySide6. These remain engineering previews requiring target-host
+validation; macOS packages are not provided.
+
 ## Install Windows
 
 1. Open Virtue and choose **New Windows**. Select a Windows 11 x64 ISO, resource
