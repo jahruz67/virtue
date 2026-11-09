@@ -10,10 +10,10 @@ import pytest
 
 pytest.importorskip("PySide6")
 from PySide6.QtCore import QThread
-from PySide6.QtWidgets import QApplication, QDialog, QProgressBar, QPushButton
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QProgressBar, QPushButton
 
 from virtue.ui import MainWindow
-from virtue.ui.dialogs import VMDialog, diagnostics_html
+from virtue.ui.dialogs import TextDialog, VMDialog, diagnostics_html
 
 
 HOST = {"ready": True, "memory_mib": 32768, "cpus": 12, "platform": "Linux", "architecture": "x86_64", "checks": [], "yttrium_ready": False}
@@ -106,16 +106,21 @@ def test_status_poll_stays_interactive_and_queues_user_actions(app):
     ("stopped", False, "installing"),
     ("paused", False, "installing"),
 ])
-def test_installation_keeps_controls_locked_until_setup_finishes_or_needs_attention(app, state, installed, setup_state):
+def test_installation_keeps_recovery_available_while_mutations_stay_locked(app, state, installed, setup_state):
     service, window = ready_window(app)
     vm = {**VM, "auto_setup": True, "installed": False, "state": "running",
           "setup": {"state": "installing", "phase": 1}}
     try:
         window.render_vms([vm])
         window._busy_changed(False)
-        assert not window.diagnostics_button.isEnabled()
-        assert not window.cards.isEnabled()
+        assert window.diagnostics_button.isEnabled()
+        assert window.cards.isEnabled()
         assert not window.create_button.isEnabled()
+        assert not window.import_button.isEnabled()
+        actions = {action.text(): action for action in window.vm_menu(VM).actions()}
+        assert not actions["Windows settings…"].isEnabled()
+        assert not actions["Create recovery checkpoint…"].isEnabled()
+        assert actions["View runtime log…"].isEnabled()
         assert all(bar.objectName() == "setupProgress" for bar in window.findChildren(QProgressBar))
         window.start_vm(vm)
         assert service.calls == []
@@ -126,6 +131,72 @@ def test_installation_keeps_controls_locked_until_setup_finishes_or_needs_attent
         assert all(bar.objectName() == "setupProgress" for bar in window.findChildren(QProgressBar))
     finally:
         window.confirm = lambda *_args, **_kwargs: True
+        window.close()
+
+
+@pytest.mark.parametrize("method, expected", [
+    ("show_log", "log"),
+    ("show_windows_credentials", "credentials"),
+    ("show_diagnostics", "diagnostics"),
+])
+def test_background_installation_allows_diagnostic_actions(app, monkeypatch, method, expected):
+    service, window = ready_window(app)
+    vm = {**VM, "auto_setup": True, "installed": False, "state": "running",
+          "setup": {"state": "installing", "phase": 1}}
+    service.read_log = lambda vm_id: service.calls.append("log") or "VM log"
+    service.windows_credentials = lambda vm_id: service.calls.append("credentials") or {"username": "Virtue", "password": "example"}
+    service.host_report = lambda: service.calls.append("diagnostics") or dict(HOST)
+    monkeypatch.setattr(TextDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: QMessageBox.StandardButton.Ok)
+    window.confirm = lambda *_args, **_kwargs: True
+    try:
+        window.render_vms([vm])
+        if method == "show_diagnostics":
+            window.show_diagnostics()
+        else:
+            getattr(window, method)(vm)
+        assert window.tasks.blocking_busy
+        assert not window.cards.isEnabled()
+        wait_for_idle(app, window)
+        assert service.calls == [expected]
+        assert window.cards.isEnabled()
+    finally:
+        window.close()
+
+
+def test_stalled_installation_can_be_force_stopped(app):
+    service, window = ready_window(app)
+    vm = {**VM, "auto_setup": True, "installed": False, "state": "running",
+          "setup": {"state": "installing", "phase": 1}}
+    service.force_stop_vm = lambda vm_id: service.calls.append(("force_stop", vm_id))
+    window.confirm = lambda *_args, **_kwargs: True
+    try:
+        window.render_vms([vm])
+        actions = {action.text(): action for action in window.vm_menu(vm).actions()}
+        assert actions["Force power off…"].isEnabled()
+        actions["Force power off…"].trigger()
+        wait_for_idle(app, window)
+        assert service.calls == [("force_stop", vm["id"])]
+    finally:
+        window.close()
+
+
+def test_failed_vm_can_retry_while_another_vm_installs(app):
+    service, window = ready_window(app)
+    installing = {**VM, "id": "installing", "auto_setup": True, "installed": False,
+                  "state": "running", "setup": {"state": "installing", "phase": 1}}
+    failed = {**installing, "id": "failed", "setup": {"state": "error", "phase": 2}}
+    service.retry_setup = lambda vm_id, progress: service.calls.append(("retry", vm_id))
+    service.list_vms = lambda: [installing, failed]
+    window.confirm = lambda *_args, **_kwargs: True
+    try:
+        window.render_vms([installing, failed])
+        retry = next(button for button in window.cards.findChildren(QPushButton) if button.text() == "Retry automatic setup")
+        assert retry.isEnabled()
+        retry.click()
+        wait_for_idle(app, window)
+        assert service.calls == [("retry", "failed")]
+    finally:
         window.close()
 
 
@@ -173,6 +244,18 @@ def test_installed_vm_can_drop_missing_installation_media(app):
     dialog.validate()
     assert dialog.result() == QDialog.DialogCode.Accepted
     assert dialog.options()["iso_path"] == ""
+
+
+def test_existing_vm_can_replace_missing_driver_media(app, tmp_path):
+    replacement = tmp_path / "virtio.iso"
+    replacement.write_bytes(b"replacement driver media")
+    dialog = VMDialog(HOST, {**VM, "drivers_iso_path": "/removed/virtio.iso"})
+    assert not dialog.drivers.isHidden()
+    dialog.drivers.path.setText(str(replacement))
+    dialog.validate()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert dialog.options()["drivers_iso_path"] == str(replacement)
+    dialog.close()
 
 
 def test_host_readiness_does_not_claim_guest_acceleration():

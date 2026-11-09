@@ -60,22 +60,40 @@ $opengl = try { [VirtueGlProbe]::Run() } catch { @{ error=$_.Exception.Message; 
 $vulkan = @{ output=''; devices=@(); error='vulkaninfo is not installed; install the Vulkan Runtime/SDK tools in the guest.' }
 $vk = Get-Command vulkaninfo -ErrorAction SilentlyContinue
 if ($vk) {
-    $start = New-Object System.Diagnostics.ProcessStartInfo
-    $start.FileName=$vk.Source; $start.Arguments='--summary'
-    $start.UseShellExecute=$false; $start.CreateNoWindow=$true
-    $start.RedirectStandardOutput=$true; $start.RedirectStandardError=$true
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo=$start
-    [void]$process.Start()
-    $stdout=$process.StandardOutput.ReadToEndAsync(); $stderr=$process.StandardError.ReadToEndAsync()
-    if (-not $process.WaitForExit(30000)) {
-        $process.Kill(); $vulkan.error='vulkaninfo timed out after 30 seconds.'
-    } else {
-        $text=$stdout.Result + $stderr.Result
-        $vulkan.output=$text; $vulkan.error=if($process.ExitCode -eq 0){''}else{"Exit code $($process.ExitCode)"}
-        $vulkan.devices=@([regex]::Matches($text,'deviceName\s*=\s*([^\r\n]+)') | ForEach-Object { @{ name=$_.Groups[1].Value.Trim() } })
+    $process = $null
+    $started = $false
+    try {
+        $start = New-Object System.Diagnostics.ProcessStartInfo
+        $start.FileName=$vk.Source; $start.Arguments='--summary'
+        $start.UseShellExecute=$false; $start.CreateNoWindow=$true
+        $start.RedirectStandardOutput=$true; $start.RedirectStandardError=$true
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo=$start
+        $started=$process.Start()
+        if (-not $started) { throw 'vulkaninfo could not be started.' }
+        $stdout=$process.StandardOutput.ReadToEndAsync(); $stderr=$process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(30000)) {
+            $vulkan.error='vulkaninfo timed out after 30 seconds.'
+        } elseif (-not [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($stdout, $stderr), 5000)) {
+            $vulkan.error='vulkaninfo did not finish writing its output.'
+        } else {
+            $text=$stdout.Result + $stderr.Result
+            $vulkan.output=$text; $vulkan.error=if($process.ExitCode -eq 0){''}else{"Exit code $($process.ExitCode)"}
+            $vulkan.devices=@([regex]::Matches($text,'deviceName\s*=\s*([^\r\n]+)') | ForEach-Object { @{ name=$_.Groups[1].Value.Trim() } })
+        }
+    } catch {
+        $vulkan.error=$_.Exception.Message
+    } finally {
+        if ($process) {
+            try {
+                if ($started -and -not $process.HasExited) {
+                    $process.Kill()
+                    if (-not $process.WaitForExit(5000)) { $vulkan.error='vulkaninfo could not be stopped after its timeout.' }
+                }
+            } catch { $vulkan.error += " Cleanup failed: $($_.Exception.Message)" }
+            finally { $process.Dispose() }
+        }
     }
-    $process.Dispose()
 }
 $adapters = @(Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,DriverDate,Status,ConfigManagerErrorCode)
 $os = Get-CimInstance Win32_OperatingSystem

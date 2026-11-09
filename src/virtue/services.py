@@ -147,7 +147,7 @@ class VMService:
                 progress.update(state="error", message="The required accelerated graphics check did not pass.")
             else:
                 atomic_json(directory / "gpu-report.json", verification)
-                config = replace(config, installed=True, iso_path="")
+                config = replace(config, installed=True, iso_path="", drivers_iso_path="")
                 self.store.save(config)
         atomic_json(directory / "setup-progress.json", progress)
         return config
@@ -171,6 +171,8 @@ class VMService:
             return self._view(config)
 
     def retry_setup(self, vm_id: str, progress=lambda message: None):
+        # Revalidate downloads on retry; cache files can disappear or change while the app is open.
+        self._assets = None
         assets = self.prepare_host(progress)
         with self.store.transaction():
             config = self.store.load(vm_id)
@@ -179,7 +181,13 @@ class VMService:
             saved = self._setup_progress(self.store.directory(vm_id))
             if type(saved.get("phase")) is int and 1 <= saved["phase"] <= 3:
                 return self._retry_installed_setup(config, assets, saved, progress)
-            if self.backend.status(vm_id).get("state") == "stopped":
+            state = self.backend.status(vm_id).get("state")
+            if state == "paused":
+                result = self.backend.resume(vm_id)
+                atomic_json(self.store.directory(vm_id) / "setup-progress.json", {
+                    "state": "installing", "message": "Resuming automatic Windows installation…"})
+                return result
+            if state == "stopped":
                 from .provisioning import prepare_windows
                 prepare_windows(config, self.store.directory(vm_id), assets, progress)
                 self.store.save(config)
@@ -196,9 +204,17 @@ class VMService:
                        key: saved.get(key) for key in ("state", "phase", "message", "updated_at")})}
         atomic_json(directory / "setup-progress.json", pending)
         try:
-            if self.backend.status(config.id).get("state") == "stopped":
+            state = self.backend.status(config.id).get("state")
+            if state == "stopped":
+                drivers_iso = assets.get("virtio")
+                if drivers_iso is not None and config.drivers_iso_path != str(drivers_iso):
+                    config = replace(config, drivers_iso_path=str(drivers_iso))
+                    self.store.save(config)
                 progress("Starting your existing Windows installation for repair…")
                 self.backend.start(config)
+            elif state == "paused":
+                progress("Resuming Windows for setup repair…")
+                self.backend.resume(config.id)
             progress("Resuming Windows driver and graphics setup…")
             if not self.backend.retry_setup(config.id, repair_iso=repair_iso):
                 pending.update(state="error", message=(

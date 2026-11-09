@@ -121,8 +121,8 @@ class MainWindow(QMainWindow):
         locked = busy or self._installation_running()
         self.create_button.setEnabled(not locked and bool(self.host.get("ready")))
         self.import_button.setEnabled(not locked)
-        self.diagnostics_button.setEnabled(not locked)
-        self.cards.setEnabled(not locked)
+        self.diagnostics_button.setEnabled(not busy)
+        self.cards.setEnabled(not busy)
         self.repair_button.setEnabled(not locked)
 
     def _installation_running(self):
@@ -148,8 +148,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message)
         QMessageBox.warning(self, "Unable to complete this action", message)
 
-    def _perform(self, message, fn, success=None, *, refresh=True, failure=None):
-        if self.tasks.blocking_busy or self._installation_running():
+    def _perform(self, message, fn, success=None, *, refresh=True, failure=None, allow_during_setup=False):
+        if self.tasks.blocking_busy or (self._installation_running() and not allow_during_setup):
             return
         self.statusBar().showMessage(message)
 
@@ -294,7 +294,7 @@ class MainWindow(QMainWindow):
         setup_pending = bool(vm.get("auto_setup")) and not vm.get("installed", False)
         launch = QPushButton("Resume Windows" if state == "paused" else "Launch Windows")
         launch.setObjectName("primary")
-        launch.setEnabled(state == "paused" or (not setup_pending and state == "stopped" and not self.vm_active(vm) and bool(self.host.get("ready"))))
+        launch.setEnabled(state == "paused" or (not self._installation_running() and not setup_pending and state == "stopped" and not self.vm_active(vm) and bool(self.host.get("ready"))))
         launch.clicked.connect(lambda: self.resume_vm(vm) if state == "paused" else self.start_vm(vm))
         if setup_pending and state != "paused":
             launch.setToolTip("Windows installs automatically. Launch is available after setup completes. If installation stops, use Retry automatic setup.")
@@ -303,7 +303,7 @@ class MainWindow(QMainWindow):
         actions.addWidget(launch)
         if setup.get("state") == "error" or (setup_pending and state == "stopped" and not self.vm_active(vm)):
             retry = QPushButton("Retry automatic setup")
-            retry.clicked.connect(lambda: self._perform("Retrying automatic Windows setup…", lambda: self.service.retry_setup(vm["id"], self.tasks.progress.emit)))
+            retry.clicked.connect(lambda: self._perform("Retrying automatic Windows setup…", lambda: self.service.retry_setup(vm["id"], self.tasks.progress.emit), allow_during_setup=True))
             actions.addWidget(retry)
         more = QPushButton("Manage Windows  ▾")
         more.setMenu(self.vm_menu(vm, more))
@@ -373,6 +373,7 @@ class MainWindow(QMainWindow):
         menu = QMenu(parent or self)
         active = self.vm_active(vm)
         stopped = not active and vm.get("state") == "stopped"
+        offline_changes = stopped and not self._installation_running()
 
         def action(title, callback, enabled=True):
             item = menu.addAction(title)
@@ -380,7 +381,7 @@ class MainWindow(QMainWindow):
             item.triggered.connect(callback)
             return item
 
-        action("Windows settings…", lambda: self.edit_vm(vm), stopped)
+        action("Windows settings…", lambda: self.edit_vm(vm), offline_changes)
         action("Shut down Windows", lambda: self.shutdown_vm(vm), active)
         action("Restart Windows", lambda: self.restart_vm(vm), vm.get("state") == "running")
         if vm.get("state") == "paused":
@@ -389,18 +390,18 @@ class MainWindow(QMainWindow):
             action("Pause Windows", lambda: self.pause_vm(vm), vm.get("state") == "running" and vm.get("active_graphics", vm.get("graphics")) != "yttrium")
         action("Force power off…", lambda: self.force_stop_vm(vm), active)
         menu.addSeparator()
-        action("Create recovery checkpoint…", lambda: self.snapshot_vm(vm), stopped)
-        action("Restore checkpoint…", lambda: self.restore_vm(vm), stopped)
-        action("Expand disk…", lambda: self.expand_vm(vm), stopped)
-        action("Export full backup…", lambda: self.export_vm(vm), stopped)
+        action("Create recovery checkpoint…", lambda: self.snapshot_vm(vm), offline_changes)
+        action("Restore checkpoint…", lambda: self.restore_vm(vm), offline_changes)
+        action("Expand disk…", lambda: self.expand_vm(vm), offline_changes)
+        action("Export full backup…", lambda: self.export_vm(vm), offline_changes)
         menu.addSeparator()
         action("Windows sign-in details…", lambda: self.show_windows_credentials(vm), bool(vm.get("auto_setup")))
-        action("Import guest GPU report…", lambda: self.import_report(vm))
+        action("Import guest GPU report…", lambda: self.import_report(vm), not self._installation_running())
         action("Guest graphics setup guide", self.show_graphics_guide)
         menu.addSeparator()
-        action("Open Windows folder", lambda: self._perform("Opening folder…", lambda: self.service.open_vm_folder(vm["id"]), refresh=False))
+        action("Open Windows folder", lambda: self._perform("Opening folder…", lambda: self.service.open_vm_folder(vm["id"]), refresh=False, allow_during_setup=True))
         action("View runtime log…", lambda: self.show_log(vm))
-        action("Remove Windows from library…", lambda: self.delete_vm(vm), stopped)
+        action("Remove Windows from library…", lambda: self.delete_vm(vm), offline_changes)
         return menu
 
     def create_vm(self):
@@ -412,7 +413,7 @@ class MainWindow(QMainWindow):
     def show_windows_credentials(self, vm):
         def show(details):
             QMessageBox.information(self, "Windows sign-in", f"Username: {details['username']}\nPassword: {details['password']}")
-        self._perform("Reading Windows sign-in details…", lambda: self.service.windows_credentials(vm["id"]), show, refresh=False)
+        self._perform("Reading Windows sign-in details…", lambda: self.service.windows_credentials(vm["id"]), show, refresh=False, allow_during_setup=True)
 
     def edit_vm(self, vm):
         dialog = VMDialog(self.host, vm, self)
@@ -428,22 +429,22 @@ class MainWindow(QMainWindow):
         self._perform("Starting Windows in its desktop window…", lambda: self.service.start_vm(vm["id"], safe_graphics=safe))
 
     def shutdown_vm(self, vm):
-        self._perform("Requesting a safe Windows shutdown…", lambda: self.service.shutdown_vm(vm["id"]))
+        self._perform("Requesting a safe Windows shutdown…", lambda: self.service.shutdown_vm(vm["id"]), allow_during_setup=True)
 
     def restart_vm(self, vm):
         if not self.confirm("Restart Windows?", "Windows will restart. Save your work in the guest first."):
             return
-        self._perform("Requesting a Windows restart…", lambda: self.service.restart_vm(vm["id"]))
+        self._perform("Requesting a Windows restart…", lambda: self.service.restart_vm(vm["id"]), allow_during_setup=True)
 
     def pause_vm(self, vm):
-        self._perform("Pausing Windows…", lambda: self.service.pause_vm(vm["id"]))
+        self._perform("Pausing Windows…", lambda: self.service.pause_vm(vm["id"]), allow_during_setup=True)
 
     def resume_vm(self, vm):
-        self._perform("Resuming Windows…", lambda: self.service.resume_vm(vm["id"]))
+        self._perform("Resuming Windows…", lambda: self.service.resume_vm(vm["id"]), allow_during_setup=True)
 
     def force_stop_vm(self, vm):
         if self.confirm("Force Windows to power off?", "This is like unplugging the power cable. Unsaved work will be lost and the Windows filesystem may need repair. Try Shut down Windows first.", danger=True):
-            self._perform("Forcing power off…", lambda: self.service.force_stop_vm(vm["id"]))
+            self._perform("Forcing power off…", lambda: self.service.force_stop_vm(vm["id"]), allow_during_setup=True)
 
     def delete_vm(self, vm):
         name, ok = QInputDialog.getText(self, "Remove Windows from library", f"This removes Windows from the library. Files and checkpoints are kept in the storage folder’s .trash directory for manual recovery.\nType the environment name to confirm: {vm['name']}")
@@ -502,14 +503,14 @@ class MainWindow(QMainWindow):
             self._perform("Checking guest graphics evidence…", lambda: self.service.import_gpu_report(vm["id"], path), lambda result: TextDialog("Guest graphics verification", json.dumps(result, indent=2), self).exec())
 
     def show_log(self, vm):
-        self._perform("Reading runtime log…", lambda: self.service.read_log(vm["id"]), lambda text: TextDialog(vm.get("name", "Windows") + " · runtime log", text, self).exec(), refresh=False)
+        self._perform("Reading runtime log…", lambda: self.service.read_log(vm["id"]), lambda text: TextDialog(vm.get("name", "Windows") + " · runtime log", text, self).exec(), refresh=False, allow_during_setup=True)
 
     def show_diagnostics(self):
         def show(result):
             self.host = result
             self.render_host()
             TextDialog("Host & diagnostics", diagnostics_html(result, self.vms), self, rich=True).exec()
-        self._perform("Refreshing host and graphics diagnostics…", self.service.host_report, show, refresh=False)
+        self._perform("Refreshing host and graphics diagnostics…", self.service.host_report, show, refresh=False, allow_during_setup=True)
 
     def show_graphics_guide(self):
         TextDialog("Automatic Windows setup", GRAPHICS_GUIDE, self, rich=True).exec()

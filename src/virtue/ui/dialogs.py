@@ -86,7 +86,10 @@ class VMDialog(QDialog):
         if self.vm:
             form.addRow("Windows version", self.version)
         form.addRow("Windows ISO", self.iso)
-        self.drivers.hide()
+        if self.vm:
+            form.addRow("VirtIO drivers ISO", self.drivers)
+        else:
+            self.drivers.hide()
         help_text = label("Use your own Windows ISO and valid license. Virtue detects the Windows edition, downloads all required components, and installs Windows, Yttrium graphics and integration drivers. Creating Windows accepts the supplied installation media's license terms.", "muted", True)
         form.addRow(help_text)
         self.installed = QCheckBox("Installation complete · boot the installed Windows disk")

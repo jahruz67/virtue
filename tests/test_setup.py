@@ -160,7 +160,7 @@ def test_ready_requires_observed_hardware_rendering(tmp_path):
     from virtue.store import VMStore
 
     store = VMStore(tmp_path)
-    config = VMConfig.new({"name": "Windows"})
+    config = VMConfig.new({"name": "Windows", "drivers_iso_path": str(tmp_path / "removed-virtio.iso")})
     store.save(config)
     (store.directory(config.id) / "virtue-setup.iso").write_bytes(b"media")
     report = {"schema_version": 1, "opengl": {"renderer": "llvmpipe", "draw_test_passed": True}}
@@ -171,6 +171,7 @@ def test_ready_requires_observed_hardware_rendering(tmp_path):
     report["opengl"]["renderer"] = "zink Vulkan (Virtio-GPU Venus (Intel Arc))"
     assert service._reconcile_setup(config).installed
     assert store.load(config.id).iso_path == ""
+    assert store.load(config.id).drivers_iso_path == ""
 
 
 def test_cached_setup_media_restores_virtio_attachment_without_replacing_credentials(tmp_path, monkeypatch):
@@ -227,7 +228,7 @@ def test_repair_media_refreshes_scripts_without_windows_installation_answers(tmp
     assert credentials.read_bytes() == account_before
 
 
-@pytest.mark.parametrize("state", ["running", "stopped"])
+@pytest.mark.parametrize("state", ["running", "stopped", "paused"])
 @pytest.mark.parametrize("agent_available", [True, False])
 def test_retry_repairs_existing_windows_and_preserves_recovery_instructions(tmp_path, monkeypatch, state, agent_available):
     from virtue.services import VMService
@@ -257,13 +258,14 @@ def test_retry_repairs_existing_windows_and_preserves_recovery_instructions(tmp_
 
     backend = SimpleNamespace(status=lambda vm_id: {"state": state},
                               start=lambda config: calls.append("start"), retry_setup=resume,
+                              resume=lambda vm_id: calls.append("unpause"),
                               setup_status=lambda vm_id: dict(guest_status))
     service = VMService(store, backend=backend)
     monkeypatch.setattr(service, "prepare_host", lambda progress: {})
     monkeypatch.setattr(provisioning, "prepare_repair", prepare_repair)
     monkeypatch.setattr(provisioning, "prepare_windows", lambda *args: pytest.fail("Windows must not be reinstalled"))
     service.retry_setup(config.id)
-    assert calls == (["start", "resume"] if state == "stopped" else ["resume"])
+    assert calls == ({"stopped": ["start", "resume"], "paused": ["unpause", "resume"]}.get(state, ["resume"]))
     assert all((directory / name).read_bytes() == data for name, data in before.items())
     saved = service._setup_progress(directory)
     assert saved["phase"] == 1
@@ -279,3 +281,72 @@ def test_retry_repairs_existing_windows_and_preserves_recovery_instructions(tmp_
     service._reconcile_setup(config)
     assert service._setup_progress(directory)["message"] == guest_status["message"]
     assert "repair_previous_status" not in service._setup_progress(directory)
+
+
+def test_paused_windows_installation_resumes_without_a_guest_agent(tmp_path, monkeypatch):
+    from virtue.services import VMService
+    from virtue.store import VMStore, atomic_json
+
+    store = VMStore(tmp_path)
+    config = VMConfig.new({"name": "Windows"})
+    store.save(config)
+    atomic_json(store.directory(config.id) / "setup-progress.json", {"state": "error", "message": "Interrupted"})
+    resumed = []
+    backend = SimpleNamespace(status=lambda vm_id: {"state": "paused"}, resume=resumed.append,
+                              retry_setup=lambda *args: pytest.fail("Windows Setup has no guest agent yet"))
+    service = VMService(store, backend=backend)
+    monkeypatch.setattr(service, "prepare_host", lambda progress: {})
+
+    service.retry_setup(config.id)
+
+    assert resumed == [config.id]
+    assert service._setup_progress(store.directory(config.id))["state"] == "installing"
+
+
+def test_stopped_repair_revalidates_downloads_and_refreshes_missing_virtio_media(tmp_path, monkeypatch):
+    from virtue.services import VMService
+    from virtue.store import VMStore, atomic_json
+
+    store = VMStore(tmp_path / "library")
+    config = VMConfig.new({"name": "Windows", "iso_path": str(tmp_path / "removed-windows.iso"),
+                           "drivers_iso_path": str(tmp_path / "removed-virtio.iso")})
+    store.save(config)
+    directory = store.directory(config.id)
+    (directory / "disk.qcow2").write_bytes(b"existing Windows")
+    credentials = directory / "windows-credentials.json"
+    credentials.write_bytes(b'{"username":"Virtue","password":"keep"}')
+    atomic_json(directory / "setup-progress.json", {"state": "error", "phase": 2, "message": "Driver failed"})
+    refreshed = {key: tmp_path / (key + ".verified") for key in ("guest", "virtio", "vulkan", "host")}
+    for path in refreshed.values():
+        path.write_bytes(b"verified download")
+    started = []
+    backend = SimpleNamespace(status=lambda vm_id: {"state": "stopped"}, start=started.append,
+                              retry_setup=lambda *args, **kwargs: True)
+    service = VMService(store, backend=backend)
+    service._assets = {"guest": tmp_path / "corrupt.zip", "virtio": tmp_path / "removed-virtio.iso"}
+    verified = []
+    monkeypatch.setattr("virtue.services.sys.platform", "linux")
+    monkeypatch.setattr(setup, "_missing_host_components", lambda: [])
+
+    def prepare_runtime(progress, *, repair):
+        assert not repair
+        verified.append(True)
+        return refreshed
+
+    def prepare_repair(target, assets, progress):
+        assert assets is refreshed
+        media = target / "virtue-repair.iso"
+        media.write_bytes(b"repair only")
+        return media
+
+    monkeypatch.setattr(setup, "prepare_runtime", prepare_runtime)
+    monkeypatch.setattr(provisioning, "prepare_repair", prepare_repair)
+    monkeypatch.setattr(provisioning, "prepare_windows", lambda *args: pytest.fail("Existing Windows must be preserved"))
+
+    service.retry_setup(config.id)
+
+    assert verified == [True]
+    assert len(started) == 1 and started[0].drivers_iso_path == str(refreshed["virtio"])
+    assert store.load(config.id).drivers_iso_path == str(refreshed["virtio"])
+    assert (directory / "disk.qcow2").read_bytes() == b"existing Windows"
+    assert credentials.read_bytes() == b'{"username":"Virtue","password":"keep"}'

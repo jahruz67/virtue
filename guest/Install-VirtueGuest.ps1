@@ -111,10 +111,37 @@ function Write-Status([string]$state, [string]$message, [int]$phase, $report = $
 }
 
 function Invoke-Installer([string]$file, [string[]]$arguments) {
-    & $file @arguments | Out-Null
-    if ($LASTEXITCODE -notin @(0, 3010, 1641)) {
-        throw "Required component installation failed ($file, exit $LASTEXITCODE)."
+    $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
+    $msi = [System.IO.Path]::GetFileName($file) -ieq 'msiexec.exe'
+    while ($true) {
+        & $file @arguments | Out-Null
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -in @(0, 3010, 1641)) { return }
+        if (-not $msi -or $exitCode -ne 1618 -or $elapsed.Elapsed.TotalSeconds -ge 90) {
+            throw "Required component installation failed ($file, exit $exitCode)."
+        }
+        Write-Status 'installing' 'Waiting for another Windows installer to finish…' $phase
+        Start-Sleep -Seconds 5
     }
+}
+
+function New-SetupMutex {
+    $security = [System.Security.AccessControl.MutexSecurity]::new()
+    $security.SetAccessRuleProtection($true, $false)
+    $security.SetOwner([System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+        $security.AddAccessRule([System.Security.AccessControl.MutexAccessRule]::new(
+            [System.Security.Principal.SecurityIdentifier]::new($sid),
+            [System.Security.AccessControl.MutexRights]::FullControl,
+            [System.Security.AccessControl.AccessControlType]::Allow))
+    }
+    $created = $false
+    return [System.Threading.Mutex]::new($false, 'Global\VirtueGuestSetup', [ref]$created, $security)
+}
+
+function Try-SetupMutex([System.Threading.Mutex]$mutex, [int]$milliseconds) {
+    try { return $mutex.WaitOne($milliseconds) }
+    catch [System.Threading.AbandonedMutexException] { return $true }
 }
 
 function Install-Driver([string]$inf, [int]$phase) {
@@ -162,6 +189,14 @@ function Install-Driver([string]$inf, [int]$phase) {
     }
 }
 
+function Install-VirtioPackage([string]$root, [string]$windows, [string]$driver) {
+    $directory = Join-Path $root "$driver\$windows\amd64"
+    if (-not (Test-Path -LiteralPath $directory)) { $directory = Join-Path $root "$driver\w10\amd64" }
+    $infs = @(Get-ChildItem -LiteralPath $directory -Filter '*.inf')
+    if (-not $infs.Count) { throw "The required $driver driver is missing." }
+    foreach ($inf in $infs) { Install-Driver $inf.FullName 1 }
+}
+
 function Install-Virtio {
     $media = @(Get-PSDrive -PSProvider FileSystem | Where-Object {
         Test-Path -LiteralPath (Join-Path $_.Root 'guest-agent\qemu-ga-x86_64.msi')
@@ -169,16 +204,18 @@ function Install-Virtio {
     if ($media.Count -ne 1) { throw 'The required VirtIO installation media is missing or ambiguous.' }
     $root = $media[0].Root
     $windows = if ([Environment]::OSVersion.Version.Build -ge 22000) { 'w11' } else { 'w10' }
-    foreach ($driver in @('vioserial', 'NetKVM', 'viostor', 'vioscsi', 'viorng', 'vioinput')) {
-        $directory = Join-Path $root "$driver\$windows\amd64"
-        if (-not (Test-Path -LiteralPath $directory)) { $directory = Join-Path $root "$driver\w10\amd64" }
-        $infs = @(Get-ChildItem -LiteralPath $directory -Filter '*.inf')
-        if (-not $infs.Count) { throw "The required $driver driver is missing." }
-        foreach ($inf in $infs) { Install-Driver $inf.FullName 1 }
-    }
+    Install-VirtioPackage $root $windows 'vioserial'
+    Write-Status 'installing' 'Installing the Windows recovery connection…' 1
     $agent = Join-Path $root 'guest-agent\qemu-ga-x86_64.msi'
     Invoke-Installer 'msiexec.exe' @('/i', $agent, '/qn', '/norestart')
+    Set-Service -Name 'QEMU-GA' -StartupType Automatic
     Start-Service -Name 'QEMU-GA'
+    $service = Get-Service -Name 'QEMU-GA'
+    try { $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(30)) }
+    finally { $service.Dispose() }
+    foreach ($driver in @('NetKVM', 'viostor', 'vioscsi', 'viorng', 'vioinput')) {
+        Install-VirtioPackage $root $windows $driver
+    }
 }
 
 function Import-DriverCertificate([string]$path) {
@@ -339,7 +376,7 @@ public static class VirtueSessionQuery {
     return [VirtueSessionQuery]::IsSignedIn($account)
 }
 
-function Start-Resume {
+function Start-Resume([System.Threading.Mutex]$setupMutex, [ref]$ownsSetupMutex) {
     $localUser = "$env:COMPUTERNAME\Virtue"
     if (-not (Test-SetupUserSession $localUser)) {
         Write-Status 'installing' 'Restarting Windows to sign in and resume setup automatically…' $phase
@@ -347,6 +384,8 @@ function Start-Resume {
         return
     }
     $previousStatus = Get-Content -LiteralPath $statusPath -Raw
+    $setupMutex.ReleaseMutex()
+    $ownsSetupMutex.Value = $false
     Start-ScheduledTask -TaskName $taskName
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     do {
@@ -360,37 +399,85 @@ function Start-Resume {
     throw 'Windows did not start the setup task. Sign in to Windows as Virtue and retry automatic setup.'
 }
 
+function Invoke-GraphicsProbe([string]$collector, [string]$output) {
+    $start = [System.Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = Join-Path $PSHOME 'powershell.exe'
+    $start.Arguments = "-NoProfile -NonInteractive -OutputFormat Text -ExecutionPolicy Bypass -File `"$collector`" -OutputPath `"$output`""
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $start
+    $started = $false
+    try {
+        $started = $process.Start()
+        if (-not $started) { throw 'The graphics verification process could not be started.' }
+        # Own the process handle from launch, including when the collector exits quickly.
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $completed = $process.WaitForExit(45000)
+        if (-not $completed) {
+            try { $process.Kill() } catch { if (-not $process.HasExited) { throw } }
+            if (-not $process.WaitForExit(5000)) { throw 'The graphics verification process could not be stopped.' }
+        }
+        $captureError = ''
+        try {
+            if (-not [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($stdout, $stderr), 5000)) {
+                $captureError = 'The graphics verification output did not finish.'
+            }
+        } catch { $captureError = $_.Exception.Message }
+        $outputText = if ($stdout.IsCompleted -and -not $stdout.IsFaulted -and -not $stdout.IsCanceled) { $stdout.Result } else { '' }
+        $errorText = if ($stderr.IsCompleted -and -not $stderr.IsFaulted -and -not $stderr.IsCanceled) { $stderr.Result } else { '' }
+        if ($captureError) { $errorText += "`n$captureError" }
+        $exitCode = $process.ExitCode
+        if ($null -eq $exitCode) { throw 'Windows did not provide the graphics verification exit code.' }
+        return [pscustomobject]@{ ExitCode=$exitCode; TimedOut=(-not $completed); StandardOutput=$outputText; StandardError=$errorText }
+    } finally {
+        try {
+            if ($started -and -not $process.HasExited) {
+                $process.Kill()
+                [void]$process.WaitForExit(5000)
+            }
+        } catch { Write-Warning 'Could not stop the graphics verification process during cleanup.' }
+        finally { $process.Dispose() }
+    }
+}
+
 function Test-Graphics {
     $collector = Join-Path $work 'Collect-VirtueGpuReport.ps1'
     $output = Join-Path $work 'gpu-report.json'
-    $stderr = Join-Path $work 'gpu-probe.stderr.txt'
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$collector`" -OutputPath `"$output`""
     $lastFailure = 'No successful graphics report was produced.'
     for ($attempt = 1; $attempt -le 12; $attempt++) {
         Write-Status 'installing' "Checking accelerated graphics ($attempt/12)…" 3
         [System.IO.File]::Delete($output)
-        $probe = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+        $result = Invoke-GraphicsProbe $collector $output
         try {
-            if (-not $probe.WaitForExit(45000)) {
-                try { $probe.Kill() } catch { if (-not $probe.HasExited) { throw } }
-                if (-not $probe.WaitForExit(5000)) { throw 'The graphics verification process could not be stopped.' }
-                $lastFailure = 'The graphics verification process timed out.'
-            } elseif ($probe.ExitCode -ne 0) {
-                $detail = (Get-Content -LiteralPath $stderr -Tail 12 -ErrorAction SilentlyContinue) -join [Environment]::NewLine
-                $lastFailure = "The graphics verification process failed (exit $($probe.ExitCode)). $detail"
-            } else {
-                try {
-                    $report = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json
-                    $renderer = [string]$report.opengl.renderer
-                    if ($report.opengl.draw_test_passed -eq $true -and $renderer -match 'zink' -and $renderer -match 'venus' -and $renderer -notmatch 'llvmpipe|lavapipe|swiftshader|Microsoft Basic Render|GDI Generic|software rasterizer') {
-                        return $report
-                    }
-                    $lastFailure = "The graphics report did not pass the hardware rendering check (renderer: $($report.opengl.renderer))."
-                } catch {
-                    $lastFailure = "The graphics report could not be read: $($_.Exception.Message)"
+            Write-WorkFile (Join-Path $work 'gpu-probe.stdout.txt') $result.StandardOutput
+            Write-WorkFile (Join-Path $work 'gpu-probe.stderr.txt') $result.StandardError
+        } catch { Write-Warning 'Could not save the complete graphics verification output.' }
+        if ($result.TimedOut) {
+            $lastFailure = 'The graphics verification process timed out.'
+        } elseif ($result.ExitCode -ne 0) {
+            $detail = if ($result.StandardError.Trim()) { $result.StandardError.Trim() } else { $result.StandardOutput.Trim() }
+            if ($detail.Length -gt 4000) { $detail = $detail.Substring(0, 4000) }
+            $lastFailure = "The graphics verification process failed (exit $($result.ExitCode)). $detail"
+        } else {
+            try {
+                $report = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json
+                $renderer = [string]$report.opengl.renderer
+                if ($report.opengl.draw_test_passed -eq $true -and $renderer -match 'zink' -and $renderer -match 'venus' -and $renderer -notmatch 'llvmpipe|lavapipe|swiftshader|Microsoft Basic Render|GDI Generic|software rasterizer') {
+                    return $report
                 }
+                if ($report.opengl.error) {
+                    $lastFailure = "The OpenGL verification failed: $($report.opengl.error)"
+                } else {
+                    $lastFailure = "The graphics report did not pass the hardware rendering check (renderer: $($report.opengl.renderer))."
+                }
+            } catch {
+                $lastFailure = "The graphics report could not be read: $($_.Exception.Message)"
             }
-        } finally { $probe.Dispose() }
+        }
         if ($attempt -lt 12) { Start-Sleep -Seconds 5 }
     }
     throw "The graphics driver did not pass its hardware rendering check. $lastFailure"
@@ -414,7 +501,29 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 $phase = 1
 $workReady = $false
+$setupMutex = $null
+$ownsSetupMutex = $false
 try {
+    if ($Repair) {
+        # Older installed scripts do not hold the mutex yet. Let their active
+        # scheduled phase finish rather than replacing assets under an installer.
+        $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
+        $active = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        while ($active -and $active.State -eq 'Running' -and $elapsed.Elapsed.TotalSeconds -lt 5) {
+            Start-Sleep -Milliseconds 250
+            $active = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        }
+        if ($active -and $active.State -eq 'Running') {
+            Write-Warning 'Windows setup is already running. Its existing phase remains in control; updated components will be applied on the next repair if needed.'
+            exit 0
+        }
+    }
+    $setupMutex = New-SetupMutex
+    $ownsSetupMutex = Try-SetupMutex $setupMutex 5000
+    if (-not $ownsSetupMutex) {
+        Write-Warning 'Windows setup is already running. This request leaves its existing phase in control without replacing active setup files.'
+        exit 0
+    }
     Initialize-WorkDirectory
     $workReady = $true
     if ($Resume -or ($Repair -and (Test-Path -LiteralPath $statusPath))) {
@@ -453,7 +562,7 @@ try {
         Register-Resume
         if ($Repair) {
             Write-Status 'installing' 'Resuming Windows setup with updated components…' $phase
-            Start-Resume
+            Start-Resume $setupMutex ([ref]$ownsSetupMutex)
             exit 0
         }
     }
@@ -494,13 +603,26 @@ try {
     if ($failure.InvocationInfo.ScriptLineNumber -gt 0) {
         $message += ' (guest setup line {0})' -f $failure.InvocationInfo.ScriptLineNumber
     }
-    try { Write-Status 'error' $message $phase -SerialOnly:(-not $workReady) }
-    catch { Write-Warning "Could not save the setup failure: $($_.Exception.Message)" }
+    if (-not $ownsSetupMutex -and $setupMutex) {
+        try { $ownsSetupMutex = Try-SetupMutex $setupMutex 0 }
+        catch { Write-Warning 'Could not reacquire the Windows setup lock to report the failure.' }
+    }
+    if ($ownsSetupMutex -or -not $setupMutex) {
+        try { Write-Status 'error' $message $phase -SerialOnly:(-not $workReady) }
+        catch { Write-Warning "Could not save the setup failure: $($_.Exception.Message)" }
+    }
     Write-Error $message -ErrorAction Continue
-    try {
-        if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
-            Disable-ScheduledTask -TaskName $taskName | Out-Null
-        }
-    } catch { Write-Warning 'Could not disable the failed setup task.' }
+    if ($ownsSetupMutex) {
+        try {
+            if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+                Disable-ScheduledTask -TaskName $taskName | Out-Null
+            }
+        } catch { Write-Warning 'Could not disable the failed setup task.' }
+    }
     exit 1
+} finally {
+    if ($setupMutex) {
+        try { if ($ownsSetupMutex) { $setupMutex.ReleaseMutex() } }
+        finally { $setupMutex.Dispose() }
+    }
 }
