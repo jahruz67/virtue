@@ -1,7 +1,6 @@
 """Offscreen Qt checks. Service fakes exercise UI wiring, not a hypervisor."""
 
 import os
-import sys
 import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -147,23 +146,3 @@ def test_safe_launch_allows_pause_using_actual_display_mode(app):
     window.close()
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Actual unavailable-host startup is exercised on the Windows development host")
-def test_real_service_gui_startup_without_hypervisor(app, tmp_path):
-    from virtue.services import VMService
-    from virtue.store import VMStore
-
-    service = VMService(VMStore(tmp_path))
-    window = MainWindow(service)
-    errors = []
-    window._error = errors.append
-    window.show()
-    app.processEvents()  # Deliver the startup singleShot before waiting for its worker.
-    wait_for_idle(app, window)
-    assert errors == []
-    assert window.host["platform"] == "Windows"
-    assert not window.host["ready"]
-    assert not window.create_button.isEnabled()
-    assert window.vms == []
-    assert window.support_folder("guest").is_dir()
-    assert window.support_folder("docs").is_dir()
-    window.close()

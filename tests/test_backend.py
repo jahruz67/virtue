@@ -120,7 +120,8 @@ class BackendRecoveryTests(unittest.TestCase):
         iso = self.root / "Windows.iso"
         for path in (code, template, iso):
             path.write_bytes(b"example")
-        host = SimpleNamespace(qemu_img="qemu-img", ovmf_secure=True, ovmf_code=str(code), ovmf_vars=str(template))
+        host = SimpleNamespace(qemu_img="qemu-img", ovmf_secure=True, ovmf_code=str(code),
+                               ovmf_vars=str(template), ovmf_vars_plain=str(template))
         backend = LinuxBackend(self.root, host)
         def provision(args, timeout=60):
             (target / "disk.qcow2").write_bytes(b"new")

@@ -35,22 +35,6 @@ production Unix-socket transport on Linux while retaining injected TCP loopback
 elsewhere. The existing snapshot test now also checks firmware/config restoration
 and preservation of the pre-restore configuration. Both changes await execution.
 
-## Windows development checks pending
-
-When explicitly authorized, run from the project root with the existing test
-dependencies installed. Record commands, versions, exit codes, and full output.
-The commands in this document have not been run in this continuation.
-
-```powershell
-$env:QT_QPA_PLATFORM = 'offscreen'
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -m virtue --diagnose
-.\.venv\Scripts\python.exe -m build
-```
-
-Record test and build outcomes separately. A passing development suite does not
-meet the Linux acceptance criteria below.
-
 ## Linux acceptance checks pending
 
 Use actual Linux x86-64 hardware with KVM and a graphical session. Record the

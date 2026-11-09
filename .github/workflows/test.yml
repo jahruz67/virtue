@@ -4,10 +4,7 @@ permissions:
   contents: read
 jobs:
   test:
-    strategy:
-      matrix:
-        os: [ubuntu-24.04, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -16,7 +13,6 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install Linux Qt dependencies
-        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0 libxkbcommon0
       - run: python -m pip install '.[test]'
       - run: python -m pytest -q
@@ -24,10 +20,8 @@ jobs:
       - name: Build Python distribution
         run: python -m build
       - name: Build DEB
-        if: runner.os == 'Linux'
         run: python tools/build_deb.py
       - name: Install and open packaged UI offscreen
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y ./dist/*.deb
@@ -47,13 +41,10 @@ jobs:
           window.close()
           PY
       - name: Install RPM builder
-        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y rpm
       - name: Build Fedora RPM
-        if: runner.os == 'Linux'
         run: python tools/build_rpm.py
       - name: Inspect Fedora RPM
-        if: runner.os == 'Linux'
         working-directory: dist
         run: |
           rpm -qpi ./*.rpm
@@ -62,7 +53,7 @@ jobs:
           sha256sum --check ./*.rpm.sha256
       - uses: actions/upload-artifact@v4
         with:
-          name: virtue-${{ runner.os }}
+          name: virtue-Linux
           path: dist/
 
   release:

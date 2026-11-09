@@ -1,7 +1,7 @@
 # Building and packaging
 
 Pushing a `v*` tag (for example, `v0.1.0`) runs the **Test and package** workflow.
-After its Linux and Windows jobs succeed, it creates a GitHub prerelease with the
+After its Linux checks succeed, it creates a GitHub prerelease with the
 Linux-built DEB and RPM, their SHA-256 checksums, Python wheel, and source archive attached.
 Update the version in `pyproject.toml` before tagging
 a new version. Rerunning the workflow for the same tag updates its release assets.
@@ -66,7 +66,5 @@ Distribution names/firmware layouts vary; diagnostics reads QEMU firmware
 descriptors and recognizes common matched firmware pairs. The frontend runs
 under Wayland and X11 using Qt's platform plugins; QEMU uses GTK.
 
-The built wheel supports desktop launch and diagnostics on Windows for development,
-but VM execution deliberately raises an actionable Linux/KVM requirement. No Windows
-host hypervisor backend or macOS guest backend is claimed.
+The supported desktop host is Linux x86-64 with KVM.
 
