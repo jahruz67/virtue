@@ -138,6 +138,26 @@ class LinuxBackend:
             raise BackendError(f"{Path(args[0]).name} failed: {detail}")
         return result
 
+    def _q35_machine_type(self, graphics: str) -> str:
+        host = self._host()
+        native = list(getattr(host, "qemu_prefix", None) or ([host.qemu] if getattr(host, "qemu", None) else []))
+        prefix = list(getattr(host, "yttrium_prefix", None) or []) if graphics == "yttrium" else native
+        if not prefix:
+            return "q35"
+        prefixes = [prefix]
+        if graphics == "yttrium" and native:
+            prefixes.append(native)
+        compatible = None
+        for command in prefixes:
+            machines = self._run(command + ["-machine", "help"], timeout=10).stdout
+            versions = {(int(major), int(minor)) for major, minor in
+                        re.findall(r"(?m)^pc-q35-(\d+)\.(\d+)\s", machines)}
+            compatible = versions if compatible is None else compatible & versions
+        if not compatible:
+            raise BackendError("The installed QEMU runtimes have no shared Q35 machine version. Use Retry / repair setup.")
+        major, minor = max(compatible)
+        return f"pc-q35-{major}.{minor}"
+
     def create(self, config: Any, progress=None) -> Any:
         self._supported()
         host = self._host()
@@ -147,22 +167,19 @@ class LinuxBackend:
             raise BackendError("Microsoft-enrolled Secure Boot OVMF firmware is missing. Install the distribution OVMF package.")
         code = Path(host.ovmf_code or "")
         template = Path(host.ovmf_vars or "")
-        if not code.is_file() or not template.is_file():
-            raise BackendError("UEFI firmware is missing. Install ovmf or edk2-ovmf.")
         if not config.secure_boot:
             plain = getattr(host, "ovmf_vars_plain", None)
             if plain:
+                code = Path(getattr(host, "ovmf_code_plain", None) or "")
                 template = Path(plain)
             elif getattr(host, "ovmf_secure", False):
                 raise BackendError("No unenrolled OVMF variable template was found. Create Windows with Secure Boot, then disable it explicitly in guest firmware before experimental graphics.")
+        if not code.is_file() or not template.is_file():
+            raise BackendError("UEFI firmware is missing. Install ovmf or edk2-ovmf.")
         if not config.iso_path or not Path(config.iso_path).is_file():
             raise BackendError("Choose a readable Windows installation ISO.")
-        if config.machine_type == "q35" and getattr(host, "qemu", None):
-            machines = self._run([host.qemu, "-machine", "help"], timeout=10).stdout
-            versions = re.findall(r"(?m)^pc-q35-(\d+)\.(\d+)\s", machines)
-            if versions:
-                major, minor = max((int(major), int(minor)) for major, minor in versions)
-                config.machine_type = f"pc-q35-{major}.{minor}"
+        if config.machine_type == "q35":
+            config.machine_type = self._q35_machine_type(config.graphics)
         with self._lock(config.id) as directory:
             disk = directory / "disk.qcow2"
             vars_file = directory / "OVMF_VARS.fd"

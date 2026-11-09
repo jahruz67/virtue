@@ -128,7 +128,7 @@ def find_firmware() -> dict[str, str]:
             if "secure-boot" in features and "enrolled-keys" in features:
                 result.setdefault("code", code)
                 result.setdefault("vars", var)
-            elif "secure-boot" not in features:
+            elif "enrolled-keys" not in features:
                 result.setdefault("code_plain", code)
                 result.setdefault("vars_plain", var)
         except (OSError, ValueError, KeyError, TypeError):
@@ -259,8 +259,9 @@ def detect_host() -> HostReport:
     report.ovmf_secure = bool(report.ovmf_code and report.ovmf_vars)
     report.ovmf_code = report.ovmf_code or report.ovmf_code_plain
     report.ovmf_vars = report.ovmf_vars or report.ovmf_vars_plain
-    add("UEFI firmware", bool(report.ovmf_code and report.ovmf_vars_plain),
-        f"Code: {report.ovmf_code}; variables template: {report.ovmf_vars}" if report.ovmf_secure else "Install ovmf (Ubuntu/Debian) or edk2-ovmf (Fedora), including an enrolled Microsoft keys variables template.")
+    plain_firmware = bool(report.ovmf_code_plain and report.ovmf_vars_plain)
+    add("UEFI firmware", plain_firmware,
+        f"Code: {report.ovmf_code_plain}; variables template: {report.ovmf_vars_plain}" if plain_firmware else "Install ovmf (Ubuntu/Debian) or edk2-ovmf (Fedora), including an unenrolled variables template for Yttrium graphics.")
     add("Desktop session", bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), "A Wayland or X11 session is required for the Windows window.")
     report.ready = all(check.ok for check in report.checks if check.required)
     report.errors = [check.detail for check in report.checks if check.required and not check.ok]

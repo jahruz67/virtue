@@ -79,9 +79,25 @@ def test_iso_detection_selects_x64_pro_and_its_language(tmp_path, monkeypatch):
     assert provisioning.inspect_windows_iso(iso, tmp_path) == {"image_index": 6, "windows_version": "11", "locale": "de-DE"}
 
 
-def test_runtime_installs_all_required_components_without_interactive_flags(tmp_path, monkeypatch):
+@pytest.mark.parametrize("missing_component", [None, "qemu-system-x86_64", "qemu-img", "swtpm", "7zip", "firmware"])
+def test_runtime_installs_all_required_components_without_interactive_flags(tmp_path, monkeypatch, missing_component):
     monkeypatch.setattr(setup.sys, "platform", "linux")
-    monkeypatch.setattr(setup.shutil, "which", lambda name: name)
+    host_prepared = missing_component is None
+    authorizations = []
+
+    def which(name):
+        missing = name == missing_component or (missing_component == "7zip" and name in {"7z", "7zz"})
+        return None if missing and not host_prepared else name
+
+    def authorize():
+        nonlocal host_prepared
+        host_prepared = True
+        authorizations.append(True)
+
+    monkeypatch.setattr(setup.shutil, "which", which)
+    monkeypatch.setattr(setup, "authorize_host", authorize)
+    monkeypatch.setattr(setup, "find_firmware", lambda: {} if missing_component == "firmware" and not host_prepared
+                        else {"code_plain": "CODE.fd", "vars_plain": "VARS.fd"})
     monkeypatch.setattr(setup.os, "access", lambda *args: True)
     monkeypatch.setattr(setup, "cache_root", lambda: tmp_path)
     specs = {key: {"filename": key, "sha256": "a" * 64} for key in ("host", "guest", "virtio", "vulkan")}
@@ -98,11 +114,23 @@ def test_runtime_installs_all_required_components_without_interactive_flags(tmp_
     commands = []
     monkeypatch.setattr(setup, "run_setup", lambda args: commands.append(args))
     paths = setup.prepare_runtime()
+    assert authorizations == ([] if missing_component is None else [True])
     assert set(paths) == set(downloaded) == {"host", "guest", "virtio", "vulkan"}
     installs = [args for args in commands if args[1] == "install"]
     assert len(installs) == 2
     assert all("--user" in args and "--noninteractive" in args and "--assumeyes" in args for args in installs)
     assert json.loads((tmp_path / "host-runtime.json").read_text())["sha256"] == "a" * 64
+
+
+def test_incomplete_host_preparation_stops_before_runtime_downloads(monkeypatch):
+    monkeypatch.setattr(setup.sys, "platform", "linux")
+    monkeypatch.setattr(setup.shutil, "which", lambda name: None if name == "qemu-img" else name)
+    monkeypatch.setattr(setup.os, "access", lambda *args: True)
+    monkeypatch.setattr(setup, "find_firmware", lambda: {"code_plain": "CODE.fd", "vars_plain": "VARS.fd"})
+    monkeypatch.setattr(setup, "authorize_host", lambda: None)
+    monkeypatch.setattr(setup, "asset_specs", lambda: pytest.fail("Downloads must wait for host preparation"))
+    with pytest.raises(ValidationError, match="Host preparation is incomplete: qemu-img"):
+        setup.prepare_runtime()
 
 
 def test_ready_requires_observed_hardware_rendering(tmp_path):

@@ -145,6 +145,52 @@ class BackendRecoveryTests(unittest.TestCase):
                  self.assertRaises(BackendError):
                 self.backend._qemu_identity(client, self.config.id)
 
+    def test_create_uses_matching_firmware_and_the_selected_qemu_machine(self):
+        files = {"CODE.fd": b"secure code", "VARS.fd": b"enrolled variables",
+                 "CODE_PLAIN.fd": b"plain code", "VARS_PLAIN.fd": b"unenrolled variables",
+                 "Windows.iso": b"installation media"}
+        for name, data in files.items():
+            (self.root / name).write_bytes(data)
+        host = SimpleNamespace(
+            qemu="system-qemu", qemu_img="qemu-img", qemu_prefix=["native-qemu"],
+            yttrium_prefix=["flatpak", "run", "--user", "org.qemu.yttrium"], ovmf_secure=True,
+            ovmf_code=str(self.root / "CODE.fd"), ovmf_vars=str(self.root / "VARS.fd"),
+            ovmf_code_plain=str(self.root / "CODE_PLAIN.fd"), ovmf_vars_plain=str(self.root / "VARS_PLAIN.fd"),
+        )
+        backend = LinuxBackend(self.root, host)
+        for vm_id, graphics, secure in (("b" * 32, "yttrium", False), ("c" * 32, "safe", True)):
+            config = VMConfig(id=vm_id, name="Windows", iso_path=str(self.root / "Windows.iso"),
+                              graphics=graphics, secure_boot=secure)
+            queried = []
+
+            def provision(args, timeout=60):
+                if args[-2:] == ["-machine", "help"]:
+                    queried.append(args[:-2])
+                    self.assertIn(args[:-2], (host.qemu_prefix, host.yttrium_prefix))
+                    version = "9.1" if args[:-2] == host.yttrium_prefix else "10.0"
+                    return SimpleNamespace(stdout=f"pc-q35-8.2 older\npc-q35-{version} current\n")
+                self.assertEqual(args[0], "qemu-img")
+                Path(args[-2]).write_bytes(b"new disk")
+
+            with self.subTest(graphics=graphics), patch.object(backend, "_supported"), \
+                 patch.object(backend, "_run", side_effect=provision):
+                backend.create(config)
+                self.assertEqual(config.machine_type, "pc-q35-8.2" if graphics == "yttrium" else "pc-q35-10.0")
+                self.assertEqual(queried, [host.yttrium_prefix, host.qemu_prefix] if graphics == "yttrium" else [host.qemu_prefix])
+                self.assertEqual((self.root / vm_id / "OVMF_CODE.fd").read_bytes(),
+                                 files["CODE.fd" if secure else "CODE_PLAIN.fd"])
+                self.assertEqual((self.root / vm_id / "OVMF_VARS.fd").read_bytes(),
+                                 files["VARS.fd" if secure else "VARS_PLAIN.fd"])
+
+    def test_incompatible_qemu_machine_versions_are_rejected_before_creation(self):
+        self.backend.host = SimpleNamespace(qemu_prefix=["native-qemu"], yttrium_prefix=["yttrium-qemu"])
+        def machines(args, timeout=60):
+            version = "8.2" if args[0] == "native-qemu" else "9.1"
+            return SimpleNamespace(stdout=f"pc-q35-{version} machine\n")
+        with patch.object(self.backend, "_run", side_effect=machines), \
+             self.assertRaisesRegex(BackendError, "no shared Q35"):
+            self.backend._q35_machine_type("yttrium")
+
     def test_create_rolls_back_only_files_it_created(self):
         vm_id = "b" * 32
         target = self.root / vm_id
@@ -156,7 +202,7 @@ class BackendRecoveryTests(unittest.TestCase):
         for path in (code, template, iso):
             path.write_bytes(b"example")
         host = SimpleNamespace(qemu_img="qemu-img", ovmf_secure=True, ovmf_code=str(code),
-                               ovmf_vars=str(template), ovmf_vars_plain=str(template))
+                               ovmf_vars=str(template), ovmf_code_plain=str(code), ovmf_vars_plain=str(template))
         backend = LinuxBackend(self.root, host)
         def provision(args, timeout=60):
             (target / "disk.qcow2").write_bytes(b"new")

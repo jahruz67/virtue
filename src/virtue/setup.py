@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 from . import __version__
 from .domain import ValidationError
+from .host import find_firmware
 from .runtime import cache_root, support_folder
 from .store import atomic_json
 
@@ -111,13 +112,30 @@ def download_asset(spec: dict, cache: Path, progress=lambda message: None) -> Pa
         Path(temporary).unlink(missing_ok=True)
 
 
+def _missing_host_components() -> list[str]:
+    commands = ("flatpak", "xorriso", "wimlib-imagex", "vulkaninfo",
+                "qemu-system-x86_64", "qemu-img", "swtpm")
+    missing = [name for name in commands if not shutil.which(name)]
+    if not (shutil.which("7zz") or shutil.which("7z")):
+        missing.append("7zip")
+    firmware = find_firmware()
+    if not (firmware.get("code_plain") and firmware.get("vars_plain")):
+        missing.append("unenrolled UEFI firmware")
+    if not os.access("/dev/kvm", os.R_OK | os.W_OK):
+        missing.append("KVM access")
+    return missing
+
+
 def prepare_runtime(progress=lambda message: None, *, repair: bool = False) -> dict[str, Path]:
     if sys.platform != "linux":
         raise ValidationError("Automatic Windows setup requires an x86-64 Linux desktop.")
-    missing = any(not shutil.which(name) for name in ("flatpak", "xorriso", "wimlib-imagex", "vulkaninfo"))
-    if repair or missing or not os.access("/dev/kvm", os.R_OK | os.W_OK):
+    missing = _missing_host_components()
+    if repair or missing:
         progress("Requesting administrator access to prepare virtualization…")
         authorize_host()
+        missing = _missing_host_components()
+        if missing:
+            raise ValidationError("Host preparation is incomplete: " + ", ".join(missing) + ". Use Retry / repair setup.")
     specs = asset_specs()
     paths = {key: download_asset(spec, cache_root(), progress) for key, spec in specs.items()}
     stamp = cache_root() / "host-runtime.json"

@@ -1,10 +1,30 @@
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
-from virtue.host import HostReport, detect_host, parse_vulkaninfo, venus_kernel_requirements
+from virtue.host import HostReport, detect_host, find_firmware, parse_vulkaninfo, venus_kernel_requirements
 
 
 class HostTests(unittest.TestCase):
+    def test_secure_capable_firmware_without_keys_is_an_unenrolled_pair(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            code, variables = root / "CODE.fd", root / "VARS.fd"
+            code.write_bytes(b"firmware")
+            variables.write_bytes(b"unenrolled")
+            descriptor = root / "firmware.json"
+            descriptor.write_text(json.dumps({
+                "targets": [{"architecture": "x86_64"}], "features": ["secure-boot", "requires-smm"],
+                "mapping": {"device": "flash", "executable": {"filename": str(code)},
+                            "nvram-template": {"filename": str(variables)}},
+            }))
+            with patch("virtue.host.glob.glob", return_value=[str(descriptor)]):
+                firmware = find_firmware()
+            self.assertEqual(firmware["code_plain"], str(code))
+            self.assertEqual(firmware["vars_plain"], str(variables))
+
     def test_non_linux_never_claims_ready(self):
         with patch('virtue.host.host_platform.system', return_value='Windows'), patch('virtue.host.memory_mib', return_value=32768):
             report = detect_host()
