@@ -75,7 +75,7 @@ QEMU, OVMF and swtpm package versions, and Wayland/X11 session type. Follow
    .venv/bin/python tools/build_deb.py
    dpkg-deb --info dist/virtue-desktop_0.1.0_amd64.deb
    dpkg-deb --contents dist/virtue-desktop_0.1.0_amd64.deb
-   sha256sum --check dist/virtue-desktop_0.1.0_amd64.deb.sha256
+   (cd dist && sha256sum --check ./*.deb.sha256)
    ```
 
    On clean Ubuntu 24.04 and Debian 12 test systems with GUI libraries, install

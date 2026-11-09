@@ -3,7 +3,7 @@
 Pushing a `v*` tag (for example, `v0.1.0`) runs the **Test and package** workflow.
 After its Linux and Windows jobs succeed, it creates a GitHub prerelease with the
 Linux-built DEB and RPM, their SHA-256 checksums, Python wheel, and source archive attached.
-Update the versions in `pyproject.toml` and `tools/build_deb.py` before tagging
+Update the version in `pyproject.toml` before tagging
 a new version. Rerunning the workflow for the same tag updates its release assets.
 Branch pushes and pull requests upload workflow artifacts without publishing a release.
 

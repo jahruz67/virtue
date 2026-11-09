@@ -15,11 +15,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import tomllib
 import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.0"
+VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 QT_REQUIREMENTS = ["PySide6-Essentials==6.8.3", "shiboken6==6.8.3"]
 DEPENDENCIES = (
     "python3 (>= 3.11), python3 (<< 3.14), qemu-system-x86 (>= 8.0), "
@@ -43,23 +44,38 @@ def ar_entry(stream, name: str, payload: bytes):
         stream.write(b"\n")
 
 
-def tar_bytes(directory: Path) -> bytes:
+def extract_wheel(wheel: Path, directory: Path) -> set[Path]:
+    with zipfile.ZipFile(wheel) as archive:
+        # Wheelhouse is trusted build input, but still enforce path containment.
+        for member in archive.infolist():
+            name = member.filename
+            if (".." in Path(name).parts or name.startswith(("/", "\\"))
+                    or Path(name).drive or "\\" in name):
+                raise RuntimeError(f"Unsafe wheel path: {name}")
+        archive.extractall(directory)
+        # ZIP stores Unix permissions even when extraction runs on Windows.
+        return {directory / member.filename for member in archive.infolist()
+                if not member.is_dir() and (member.external_attr >> 16) & 0o111}
+
+
+def tar_bytes(directory: Path, executables: set[Path] | None = None) -> bytes:
     result = io.BytesIO()
     # gzip header timestamps are normalized as well as archive entries.
     import gzip
     with gzip.GzipFile(fileobj=result, mode="wb", mtime=0) as compressed:
-        with tarfile.open(fileobj=compressed, mode="w") as archive:
+        # dpkg supports GNU long paths, but rejects PAX extended headers.
+        with tarfile.open(fileobj=compressed, mode="w", format=tarfile.GNU_FORMAT) as archive:
             for path in sorted(directory.rglob("*")):
                 info = archive.gettarinfo(str(path), arcname="./" + path.relative_to(directory).as_posix())
                 info.uid = info.gid = 0
                 info.uname = info.gname = "root"
                 info.mtime = 0
-                info.mode = 0o755 if info.isdir() or path.name == "virtue" else 0o644
-                if info.isdir():
-                    archive.addfile(info)
-                else:
+                info.mode = 0o755 if info.isdir() or path in (executables or ()) else 0o644
+                if info.isfile():
                     with path.open("rb") as stream:
                         archive.addfile(info, stream)
+                else:
+                    archive.addfile(info)
     return result.getvalue()
 
 
@@ -69,6 +85,8 @@ def main() -> int:
     parser.add_argument("--wheelhouse", type=Path, default=ROOT / "artifacts" / "linux-wheels")
     parser.add_argument("--offline", action="store_true", help="Use only wheels already in wheelhouse")
     args = parser.parse_args()
+    args.output = args.output.resolve()
+    args.wheelhouse = args.wheelhouse.resolve()
     args.wheelhouse.mkdir(parents=True, exist_ok=True)
     if not args.offline:
         run([sys.executable, "-m", "pip", "download", "--only-binary=:all:",
@@ -79,29 +97,28 @@ def main() -> int:
     app_wheel = ROOT / "dist" / f"virtue_desktop-{VERSION}-py3-none-any.whl"
     qt_wheels = []
     for prefix in ("PySide6_Essentials", "shiboken6"):
-        matches = sorted(args.wheelhouse.glob(f"{prefix}-6.8.3-*manylinux*x86_64.whl"))
+        matches = sorted(path for path in args.wheelhouse.glob("*-6.8.3-*manylinux*x86_64.whl")
+                         if path.name.casefold().startswith(prefix.casefold() + "-"))
         if len(matches) != 1:
             raise RuntimeError(f"Expected exactly one Linux wheel for {prefix}, found {matches}")
         qt_wheels.append(matches[0])
     args.output.mkdir(parents=True, exist_ok=True)
     package = args.output / f"virtue-desktop_{VERSION}_amd64.deb"
-    with tempfile.TemporaryDirectory(prefix="virtue-deb-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="virtue-deb-", dir=args.output) as temporary:
         stage = Path(temporary)
         payload = stage / "data"
         libraries = payload / "opt" / "virtue" / "lib"
         libraries.mkdir(parents=True)
+        executables = set()
         for wheel in [app_wheel, *qt_wheels]:
-            with zipfile.ZipFile(wheel) as archive:
-                # Wheelhouse is trusted build input, but still enforce path containment.
-                if any(".." in Path(n).parts or n.startswith(("/", "\\")) for n in archive.namelist()):
-                    raise RuntimeError("Unsafe wheel path")
-                archive.extractall(libraries)
+            executables.update(extract_wheel(wheel, libraries))
         bin_dir = payload / "usr" / "bin"
         bin_dir.mkdir(parents=True)
         launcher = bin_dir / "virtue"
         launcher.write_text("#!/usr/bin/python3\nimport sys\nsys.path.insert(0, '/opt/virtue/lib')\n"
                             "from virtue.app import main\nraise SystemExit(main())\n", encoding="utf-8", newline="\n")
         launcher.chmod(0o755)
+        executables.add(launcher)
         share = payload / "opt" / "virtue" / "share"
         share.mkdir(parents=True)
         for name in ("docs", "guest", "resources"):
@@ -114,9 +131,12 @@ def main() -> int:
         icons = payload / "usr/share/icons/hicolor/scalable/apps"
         icons.mkdir(parents=True)
         shutil.copy2(ROOT / "packaging/linux/virtue.svg", icons)
+        wheels = [{"file": p.name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in qt_wheels]
+        import json
+        (share / "bundled-wheels.json").write_text(json.dumps(wheels, indent=2), encoding="utf-8", newline="\n")
         control = stage / "control"
         control.mkdir()
-        installed_size = sum(p.stat().st_size for p in payload.rglob("*") if p.is_file()) // 1024
+        installed_size = (sum(p.stat().st_size for p in payload.rglob("*") if p.is_file()) + 1023) // 1024
         (control / "control").write_text(
             f"Package: virtue-desktop\nVersion: {VERSION}\nArchitecture: amd64\n"
             "Maintainer: Virtue contributors <maintainers@virtue.invalid>\nSection: otherosfs\n"
@@ -130,16 +150,17 @@ def main() -> int:
             if path.is_file():
                 digest_lines.append(f"{hashlib.md5(path.read_bytes(), usedforsecurity=False).hexdigest()}  {path.relative_to(payload).as_posix()}\n")
         (control / "md5sums").write_text("".join(digest_lines), encoding="ascii", newline="\n")
-        wheels = [{"file": p.name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in qt_wheels]
-        import json
-        (share / "bundled-wheels.json").write_text(json.dumps(wheels, indent=2), encoding="utf-8")
-        with package.open("wb") as stream:
+        staged_package = stage / package.name
+        with staged_package.open("wb") as stream:
             stream.write(b"!<arch>\n")
             ar_entry(stream, "debian-binary", b"2.0\n")
             ar_entry(stream, "control.tar.gz", tar_bytes(control))
-            ar_entry(stream, "data.tar.gz", tar_bytes(payload))
-    digest = hashlib.sha256(package.read_bytes()).hexdigest()
-    package.with_suffix(".deb.sha256").write_text(f"{digest}  {package.name}\n", encoding="ascii")
+            ar_entry(stream, "data.tar.gz", tar_bytes(payload, executables))
+        digest = hashlib.sha256(staged_package.read_bytes()).hexdigest()
+        staged_checksum = stage / (package.name + ".sha256")
+        staged_checksum.write_text(f"{digest}  {package.name}\n", encoding="ascii", newline="\n")
+        staged_package.replace(package)
+        staged_checksum.replace(package.with_suffix(".deb.sha256"))
     print(f"Built {package} ({package.stat().st_size:,} bytes)\nSHA256 {digest}")
     return 0
 

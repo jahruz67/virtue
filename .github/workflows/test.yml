@@ -26,6 +26,26 @@ jobs:
       - name: Build DEB
         if: runner.os == 'Linux'
         run: python tools/build_deb.py
+      - name: Install and open packaged UI offscreen
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ./dist/*.deb
+          /usr/bin/virtue --version
+          (cd / && md5sum --check /var/lib/dpkg/info/virtue-desktop.md5sums)
+          QT_QPA_PLATFORM=offscreen /usr/bin/python3 -I - <<'PY'
+          import ctypes
+          import sys
+          sys.path.insert(0, "/opt/virtue/lib")
+          from PySide6.QtWidgets import QApplication
+          from virtue.ui import MainWindow
+          ctypes.CDLL("/opt/virtue/lib/PySide6/Qt/plugins/platforms/libqxcb.so")
+          app = QApplication([])
+          window = MainWindow(None, auto_refresh=False)
+          window.show()
+          app.processEvents()
+          window.close()
+          PY
       - name: Install RPM builder
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y rpm

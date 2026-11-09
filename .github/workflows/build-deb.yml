@@ -14,6 +14,7 @@ on:
       - "resources/**"
       - "packaging/linux/**"
       - "tools/build_deb.py"
+      - "tests/test_deb.py"
   pull_request:
     paths:
       - ".github/workflows/build-deb.yml"
@@ -27,6 +28,7 @@ on:
       - "resources/**"
       - "packaging/linux/**"
       - "tools/build_deb.py"
+      - "tests/test_deb.py"
   workflow_dispatch:
 
 permissions:
@@ -59,16 +61,36 @@ jobs:
       - name: Inspect Debian package
         working-directory: dist
         run: |
-          dpkg-deb --info virtue-desktop_0.1.0_amd64.deb
-          dpkg-deb --contents virtue-desktop_0.1.0_amd64.deb
-          sha256sum --check virtue-desktop_0.1.0_amd64.deb.sha256
+          dpkg-deb --info ./*.deb
+          dpkg-deb --contents ./*.deb
+          sha256sum --check ./*.deb.sha256
+
+      - name: Install and open packaged UI offscreen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ./dist/*.deb
+          /usr/bin/virtue --version
+          (cd / && md5sum --check /var/lib/dpkg/info/virtue-desktop.md5sums)
+          QT_QPA_PLATFORM=offscreen /usr/bin/python3 -I - <<'PY'
+          import ctypes
+          import sys
+          sys.path.insert(0, "/opt/virtue/lib")
+          from PySide6.QtWidgets import QApplication
+          from virtue.ui import MainWindow
+          ctypes.CDLL("/opt/virtue/lib/PySide6/Qt/plugins/platforms/libqxcb.so")
+          app = QApplication([])
+          window = MainWindow(None, auto_refresh=False)
+          window.show()
+          app.processEvents()
+          window.close()
+          PY
 
       - name: Upload Debian package and checksum
         uses: actions/upload-artifact@v4
         with:
           name: virtue-desktop-deb-ubuntu-24.04-amd64
           path: |
-            dist/virtue-desktop_0.1.0_amd64.deb
-            dist/virtue-desktop_0.1.0_amd64.deb.sha256
+            dist/*.deb
+            dist/*.deb.sha256
           if-no-files-found: error
           retention-days: 14
