@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import socket
+import sys
 import tempfile
 import threading
 import time
@@ -14,16 +15,22 @@ class QMPProtocolTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.path = str(Path(self.temp.name) / "qmp.sock")
-        # The wire protocol is tested on loopback so it also runs on Windows
-        # Python builds without AF_UNIX. Production accepts Unix sockets only.
-        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.listener.bind(("127.0.0.1", 0))
+        # Exercise the production Unix transport on Linux. Other development
+        # hosts use injected loopback transport, including Windows without AF_UNIX.
+        if sys.platform == "linux":
+            self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.listener.bind(self.path)
+        else:
+            self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.listener.bind(("127.0.0.1", 0))
         self.address = self.listener.getsockname()
         self.listener.listen(1)
         self.errors = []
         self.thread = None
 
     def client(self):
+        if sys.platform == "linux":
+            return QMPClient(self.path)
         address = self.address
         class FixtureSocket(socket.socket):
             def __init__(self):

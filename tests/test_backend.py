@@ -48,14 +48,22 @@ class BackendRecoveryTests(unittest.TestCase):
         self.assertEqual(self.backend.snapshot(self.config, "working"), "working")
         (self.directory / "disk.qcow2").write_bytes(b"disk-after")
         (self.directory / "OVMF_VARS.fd").write_bytes(b"vars-after")
+        (self.directory / "OVMF_CODE.fd").write_bytes(b"code-after")
+        (self.directory / "firmware.json").write_text('{"changed": true}')
+        changed_config = {**asdict(self.config), "memory_mib": 4096}
+        (self.directory / "config.json").write_text(json.dumps(changed_config))
         (self.directory / "tpm" / "state").write_bytes(b"tpm-after")
         self.backend.restore_snapshot(self.config, "working")
         self.assertEqual((self.directory / "disk.qcow2").read_bytes(), b"disk-before")
         self.assertEqual((self.directory / "OVMF_VARS.fd").read_bytes(), b"vars-before")
+        self.assertEqual((self.directory / "OVMF_CODE.fd").read_bytes(), b"code-before")
+        self.assertEqual((self.directory / "firmware.json").read_bytes(), b'{}')
+        self.assertEqual(json.loads((self.directory / "config.json").read_text()), asdict(self.config))
         self.assertEqual((self.directory / "tpm" / "state").read_bytes(), b"tpm-before")
         snapshots = self.backend.list_snapshots(self.config)
         recovery = next(name for name in snapshots if name.startswith("before-restore-"))
         self.assertEqual((self.directory / "snapshots" / recovery / "disk.qcow2").read_bytes(), b"disk-after")
+        self.assertEqual(json.loads((self.directory / "snapshots" / recovery / "config.json").read_text()), changed_config)
         self.assertFalse((self.directory / "restore_pending.json").exists())
 
     def test_reject_snapshot_path_traversal(self):

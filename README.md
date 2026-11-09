@@ -4,11 +4,12 @@ A Linux-first Qt 6 desktop application for running Windows with QEMU/KVM. The
 engine launches real QEMU and swtpm processes, manages them through QMP, and stores
 each VM independently of the desktop application's lifetime.
 
-**Release status: engineering preview, not a validated Linux release.** Development
-and automated tests were run on Windows. This environment has no Linux/KVM host,
-Windows ISO, or SOLIDWORKS license. Windows installation, real GPU acceleration,
+**Release status: engineering preview, not a validated Linux release.** The handoff
+records partial automated test runs on Windows; final suite results are unconfirmed.
+This environment has no Linux/KVM host, Windows ISO, or SOLIDWORKS license.
+Windows installation, real GPU acceleration,
 audio, and CAD compatibility must be validated on the target hardware. See
-[validation](docs/validation.md) for exact evidence and runnable acceptance checks.
+[validation](docs/validation.md) for reported evidence, gaps, and acceptance checks.
 
 ## Install on Linux x86-64
 

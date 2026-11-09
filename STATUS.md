@@ -1,7 +1,7 @@
 # Virtue project handoff
 
 **Updated:** 8 November 2026  
-**Workspace:** `C:\Users\360he\Documents\ChatGPT\virt`  
+**Workspace:** `C:\Users\360he\OneDrive\Documents\virtue`  
 **Product target:** a Linux-first desktop for installing and running Windows on QEMU/KVM, with carefully gated experimental Yttrium graphics.  
 **Current maturity:** a substantial, buildable engineering preview with a real Linux QEMU/KVM code path and Qt desktop; **not yet validated as a working Linux Windows-VM product**.
 
@@ -26,13 +26,21 @@ Continue in this order: (1) build and validate the Linux package on actual Linux
 - A DEB builder, Linux smoke script, desktop entry/icon, third-party notices and GitHub CI definition are present. The builder downloads Linux Qt wheels and constructs a DEB on a build machine; this alone does not prove the package installs or launches correctly on Ubuntu/Debian.
 - No substantial macOS backend has been started, by design.
 
-## Work completed in this session
+## Work completed before this continuation
 
 The initial checkout was empty. A Python/Qt architecture and Linux QEMU/KVM implementation were created, along with the UI, host/GPU probes, guest scripts, recovery/export code, Linux package builder, documentation and test suite. QEMU/HVF and Yttrium component requirements were researched against the [QEMU invocation documentation](https://www.qemu.org/docs/master/system/invocation.html), [QMP specification](https://www.qemu.org/docs/master/interop/qmp-spec.html), and the [upstream Yttrium repository](https://github.com/arehnman/yttrium-virtio-gpu).
 
 The UI was opened through Qt's offscreen platform with the **actual** service on the current Windows development host. It correctly reports that a Linux x86-64 host is required, leaves Create Windows disabled, and displays the empty state. This is a host-readiness/UI observation only. A screenshot of that truthful empty state is at `.test-artifacts/desktop.png` (ignored by Git).
 
 Several integration and safety issues were found and addressed during review: preserve host CPU/memory, bind VM settings changes to stopped guests, boot with Windows-compatible SATA/network defaults, keep VM-specific verified UEFI firmware for portability, create cold snapshots of disk + UEFI + TPM together, make removal recoverable, verify imported backup contents before publishing, reject dangerous QCOW2 external references, distinguish the active safe display from the saved graphics preference, handle a running QEMU whose QMP connection fails, and refresh host diagnostics. The latest backend edit also corrected file-descriptor sync for Windows-side snapshot tests. Recheck the final working tree and validation before relying on those fixes.
+
+## Continuation on 8 November 2026
+
+- The checkout starts from committed baseline `e99b555` with a clean working tree, replacing the earlier untracked-file state. No `dist/` directory is present in this checkout.
+- Created [the validation ledger](docs/validation.md), distinguishing historical reports from current evidence and listing pending Windows/Linux acceptance checks. Updated README's evidence wording.
+- Static integration review confirmed export prepares the VM offline, snapshot restore includes configuration and private firmware, never-started imports recreate TPM storage, and sync handles use read/write mode. These observations do not establish runtime correctness.
+- Updated QMP protocol fixtures to use production Unix sockets on Linux and injected loopback transport elsewhere. Extended the existing snapshot test to check firmware/config restoration and pre-restore config preservation.
+- No tests, diagnostics, builds, installs, application launches, or CI runs were performed in this continuation. Test/build execution requires an explicit user request under the current workspace instructions. Real Linux hardware validation remains outstanding.
 
 ## What has and has not been verified
 
@@ -50,8 +58,8 @@ Checks completed earlier in the session:
 
 ## Immediate handoff checklist
 
-1. Review `git status --short` and the current diff. This repository has no commits yet; files are currently untracked. Check there are no local files to preserve before future cleanup. Do not remove user data.
-2. Run the final Windows-compatible unit/UI suite from the project root:
+1. Review `git status --short` and the current diff. A committed baseline now exists; the continuation changes are uncommitted. Preserve local files and user data.
+2. When test/build execution is explicitly requested, run the final Windows-compatible unit/UI suite from the project root:
 
    ```powershell
    $env:QT_QPA_PLATFORM = 'offscreen'
@@ -67,7 +75,7 @@ Checks completed earlier in the session:
 6. Test archive export/import with a real stopped Windows VM, including TPM/NVRAM, disk integrity and backup restore. Keep BitLocker recovery keys outside the VM. Test process/reboot failure paths before broad use.
 7. On each GPU under test, record model, kernel, Mesa/Vulkan driver, QEMU/Flatpak/virgl revisions and exact driver archive hash. Install the guest driver only after external backup and checkpoint; manually manage guest Secure Boot/test-signing. Import real guest reports. Test Windows rendering and the upstream graphics sample workload. Distinguish driver discovery from a completed draw and from stable Direct3D/CAD behavior.
 8. Follow [docs/cad-testing.md](docs/cad-testing.md) for comparative native/QEMU/Yttrium measurements and SOLIDWORKS procedure. Do not claim SOLIDWORKS certification, compatibility, or performance until tested. Record unavailable licensing separately from failures.
-9. Update [docs/validation.md](docs/validation.md) with commands, host models, exact software versions, results and known issues. This file is linked by README but **does not exist yet**; create it as the evidence ledger before claiming a release. Update README's project state at the same time.
+9. Append actual run evidence to [docs/validation.md](docs/validation.md): commands, host models, exact software versions, results and known issues. The ledger now exists, but historical reports and pending procedures are not fresh execution evidence. Update README's project state when results justify it.
 10. Only when Linux installation, Windows lifecycle/recovery, packaging, and reproducible host/GPU evidence are satisfactory should a separate macOS implementation be considered. Mac needs its own architecture, hardware validation, Windows guest choices and graphics story.
 
 ## Current known gaps / risk points
@@ -79,7 +87,7 @@ Checks completed earlier in the session:
 - `resources/yttrium-stack.json` records researched current upstream assets, not a tested or reproducible build of all source inputs. Verify all checksums on Linux and track the upstream source-manifest caveat.
 - QEMU `pipewire`/PulseAudio backend availability varies by distro and session. Verify real audio output and gracefully handle no audio backend.
 - Review every platform/version statement in host detection and packaging against the actual install target. Support for Wayland/X11 is not proven by Windows offscreen UI tests.
-- The project is uncommitted. Establish a baseline commit only after reviewing the worktree and confirming the desired project repository identity; no remote or release has been configured.
+- The project has committed baseline `e99b555`; continuation changes remain uncommitted. No commit, push, or release was performed in this continuation.
 
 ## Useful files
 
