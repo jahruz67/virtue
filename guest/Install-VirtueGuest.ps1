@@ -31,6 +31,49 @@ function Invoke-Installer([string]$file, [string[]]$arguments) {
     }
 }
 
+function Install-Driver([string]$inf, [int]$phase) {
+    if (-not (Test-Path -LiteralPath $inf -PathType Leaf)) { throw "The driver INF is missing: $inf" }
+    Write-Status 'installing' ("Installing driver: {0}…" -f (Split-Path -Leaf $inf)) $phase
+    $token = [Guid]::NewGuid().ToString('N')
+    $stdout = Join-Path $work ($token + '.stdout.txt')
+    $stderr = Join-Path $work ($token + '.stderr.txt')
+    $log = Join-Path $work 'pnputil.log'
+    $command = '/add-driver "{0}" /install' -f $inf
+    try {
+        $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\pnputil.exe') -ArgumentList $command -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $exitCode = $process.ExitCode
+        $output = (@(Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue
+                     Get-Content -LiteralPath $stderr -ErrorAction SilentlyContinue) -join [Environment]::NewLine).Trim()
+        $logSaved = $false
+        $setupLines = @()
+        if ($exitCode -notin @(0, 3010, 1641)) {
+            try {
+                $setupLines = @(Get-Content -LiteralPath (Join-Path $env:SystemRoot 'inf\setupapi.dev.log') -Tail 80 -ErrorAction Stop)
+            } catch { Write-Warning 'Could not read the Windows driver log.' }
+        }
+        try {
+            Add-Content -LiteralPath $log -Encoding UTF8 -Value ("{0:o} pnputil.exe {1}`r`nExit: {2}`r`n{3}`r`n" -f [DateTime]::UtcNow, $command, $exitCode, $output)
+            $logSaved = $true
+            if ($setupLines.Count) {
+                Add-Content -LiteralPath $log -Encoding UTF8 -Value 'Recent Windows SetupAPI driver log:'
+                $setupLines | Add-Content -LiteralPath $log -Encoding UTF8
+            }
+        } catch { Write-Warning 'Could not save the complete driver installation log.' }
+        if ($exitCode -notin @(0, 3010, 1641)) {
+            $details = if ($output) { $output.Substring(0, [Math]::Min($output.Length, 4000)) } else { 'PnPUtil returned no explanation.' }
+            $errors = @($setupLines | Where-Object { $_ -match '^\s*!!!' })
+            if (-not $errors.Count) { $errors = @($setupLines | Select-Object -Last 12) }
+            $setupDetails = ($errors -join [Environment]::NewLine).Trim()
+            if ($setupDetails.Length -gt 1800) { $setupDetails = $setupDetails.Substring($setupDetails.Length - 1800) }
+            if ($setupDetails) { $details += "`nRecent Windows driver errors:`n$setupDetails" }
+            $logDetails = if ($logSaved) { "Full log inside Windows: $log" } else { 'The driver log could not be saved.' }
+            throw "Driver installation failed for '$inf' (PnPUtil exit $exitCode).`n$details`n$logDetails"
+        }
+    } finally {
+        Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Install-Virtio {
     $media = @(Get-PSDrive -PSProvider FileSystem | Where-Object {
         Test-Path -LiteralPath (Join-Path $_.Root 'guest-agent\qemu-ga-x86_64.msi')
@@ -43,7 +86,7 @@ function Install-Virtio {
         if (-not (Test-Path -LiteralPath $directory)) { $directory = Join-Path $root "$driver\w10\amd64" }
         $infs = @(Get-ChildItem -LiteralPath $directory -Filter '*.inf')
         if (-not $infs.Count) { throw "The required $driver driver is missing." }
-        foreach ($inf in $infs) { Invoke-Installer 'pnputil.exe' @('/add-driver', $inf.FullName, '/install') }
+        foreach ($inf in $infs) { Install-Driver $inf.FullName 1 }
     }
     $agent = Join-Path $root 'guest-agent\qemu-ga-x86_64.msi'
     Invoke-Installer 'msiexec.exe' @('/i', $agent, '/qn', '/norestart')
@@ -147,7 +190,7 @@ try {
         $infs = @(Get-ChildItem -LiteralPath $drivers -Recurse -Filter '*.inf' | Where-Object { $_.FullName -notmatch '\\(x86|i386|arm64)\\' })
         if (-not $infs.Count) { throw 'The verified Yttrium archive is missing the x64 graphics driver.' }
         Write-Status 'installing' 'Installing Yttrium graphics drivers…' 2
-        foreach ($inf in $infs) { Invoke-Installer 'pnputil.exe' @('/add-driver', $inf.FullName, '/install') }
+        foreach ($inf in $infs) { Install-Driver $inf.FullName 2 }
         Write-Status 'installing' 'Installing the Vulkan runtime…' 2
         $installer = Start-Process -FilePath (Join-Path $work 'VulkanRT.exe') -ArgumentList '/S' -Wait -PassThru
         if ($installer.ExitCode -notin @(0, 3010)) { throw 'The Vulkan runtime did not install successfully.' }
