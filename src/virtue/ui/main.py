@@ -286,6 +286,7 @@ class MainWindow(QMainWindow):
             content.addWidget(label(str(setup.get("message", "Installing Windows automatically…")), "muted", True))
         if vm.get("error"):
             error = label(str(vm["error"]), wrap=True)
+            error.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
             error.setStyleSheet("color:#ffc08c;")
             content.addWidget(error)
         row.addLayout(content, 1)
@@ -355,7 +356,13 @@ class MainWindow(QMainWindow):
             progress.setValue(len(stages) if complete else phase)
         progress.setToolTip("Stages: Windows installation → integration drivers → Yttrium and Vulkan → graphics verification")
         layout.addWidget(progress)
-        layout.addWidget(label(message, "muted", True))
+        details = label(message, "muted", True)
+        details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        layout.addWidget(details)
+        if failed:
+            copy_error = QPushButton("Copy error")
+            copy_error.clicked.connect(lambda: QApplication.clipboard().setText(message))
+            layout.addWidget(copy_error, alignment=Qt.AlignmentFlag.AlignLeft)
         return indicator
 
     @staticmethod

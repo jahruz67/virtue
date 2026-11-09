@@ -133,6 +133,28 @@ def test_incomplete_host_preparation_stops_before_runtime_downloads(monkeypatch)
         setup.prepare_runtime()
 
 
+@pytest.mark.parametrize("missing", [[], ["KVM access"]])
+def test_cached_host_preparation_recovers_lost_permissions(tmp_path, monkeypatch, missing):
+    from virtue.services import VMService
+    from virtue.store import VMStore
+
+    service = VMService(VMStore(tmp_path), backend=SimpleNamespace())
+    cached = {"virtio": tmp_path / "cached.iso"}
+    refreshed = {"virtio": tmp_path / "refreshed.iso"}
+    service._assets = cached
+    monkeypatch.setattr("virtue.services.sys.platform", "linux")
+    monkeypatch.setattr(setup, "_missing_host_components", lambda: missing)
+    calls = []
+
+    def prepare(progress, *, repair):
+        calls.append(repair)
+        return refreshed
+
+    monkeypatch.setattr(setup, "prepare_runtime", prepare)
+    assert service.prepare_host() is (refreshed if missing else cached)
+    assert calls == ([False] if missing else [])
+
+
 def test_ready_requires_observed_hardware_rendering(tmp_path):
     from virtue.services import VMService
     from virtue.store import VMStore

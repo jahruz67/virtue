@@ -52,8 +52,8 @@ class VMService:
         if sys.platform != "linux":
             # Keep the existing read-only preview usable on development hosts.
             return {}
-        if self._assets is None or repair:
-            from .setup import prepare_runtime
+        from .setup import _missing_host_components, prepare_runtime
+        if self._assets is None or repair or _missing_host_components():
             self._assets = prepare_runtime(progress, repair=repair)
             if not self._host_override:
                 self._host_report = None

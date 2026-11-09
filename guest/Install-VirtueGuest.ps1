@@ -2,17 +2,102 @@
 [CmdletBinding()]
 param([switch]$Resume, [switch]$Repair)
 $ErrorActionPreference = 'Stop'
-$work = Join-Path $env:ProgramData 'Virtue'
+$work = Join-Path ([System.Environment]::GetFolderPath('CommonApplicationData')) 'Virtue'
 $statusPath = Join-Path $work 'setup-status.json'
 $installedAssetsPath = Join-Path $work 'installed-assets.json'
 $taskName = 'VirtueFinishSetup'
 
-function Write-Status([string]$state, [string]$message, [int]$phase, $report = $null) {
+function New-WorkSecurity([bool]$directory) {
+    $security = if ($directory) { [System.Security.AccessControl.DirectorySecurity]::new() } else { [System.Security.AccessControl.FileSecurity]::new() }
+    $security.SetAccessRuleProtection($true, $false)
+    $security.SetOwner([System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+    $inheritance = if ($directory) { [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit' } else { [System.Security.AccessControl.InheritanceFlags]::None }
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+            [System.Security.Principal.SecurityIdentifier]::new($sid),
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance, [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow)
+        $security.AddAccessRule($rule)
+    }
+    return $security
+}
+
+function Initialize-WorkDirectory {
+    $entry = Get-Item -LiteralPath $work -Force -ErrorAction SilentlyContinue
+    if (-not $entry) {
+        $entry = [System.IO.Directory]::CreateDirectory($work, (New-WorkSecurity $true))
+    } elseif ($entry -isnot [System.IO.DirectoryInfo]) {
+        throw 'The Windows setup work path must be a directory.'
+    }
+    $pending = [System.Collections.Generic.Queue[System.IO.FileSystemInfo]]::new()
+    $entries = [System.Collections.Generic.List[System.IO.FileSystemInfo]]::new()
+    $pending.Enqueue($entry)
+    while ($pending.Count) {
+        $entry = $pending.Dequeue()
+        if (($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $entry.LinkType) {
+            throw 'Windows setup files must not contain links or junctions.'
+        }
+        $entries.Add($entry)
+        if ($entry -is [System.IO.DirectoryInfo]) {
+            foreach ($child in (Get-ChildItem -LiteralPath $entry.FullName -Force)) { $pending.Enqueue($child) }
+        }
+    }
+    foreach ($entry in $entries) {
+        $entry.Refresh()
+        if (($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $entry.LinkType) {
+            throw 'Windows setup files must not contain links or junctions.'
+        }
+        Set-Acl -LiteralPath $entry.FullName -AclObject (New-WorkSecurity ($entry -is [System.IO.DirectoryInfo]))
+    }
+}
+
+function Copy-SetupFile([string]$source, [string]$destination) {
+    $existing = [System.IO.FileInfo]::new($destination)
+    if ($existing.Exists) { $existing.IsReadOnly = $false }
+    $reader = [System.IO.File]::OpenRead($source)
+    try {
+        $writer = [System.IO.File]::Create($destination, 4096, [System.IO.FileOptions]::None, (New-WorkSecurity $false))
+        try { $reader.CopyTo($writer) } finally { $writer.Dispose() }
+    } finally { $reader.Dispose() }
+}
+
+function Write-WorkFile([string]$path, [string]$text) {
+    $stream = [System.IO.File]::Create($path, 4096, [System.IO.FileOptions]::None, (New-WorkSecurity $false))
+    try {
+        $writer = [System.IO.StreamWriter]::new($stream, [System.Text.UTF8Encoding]::new($true))
+        try { $writer.WriteLine($text) } finally { $writer.Dispose() }
+    } finally { $stream.Dispose() }
+}
+
+function Publish-SetupStatus {
+    $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        try {
+            Move-Item -LiteralPath ($statusPath + '.tmp') -Destination $statusPath -Force
+            return
+        } catch {
+            # Guest-agent readers can hold a handle without FILE_SHARE_DELETE.
+            $exception = $_.Exception
+            $retryable = $false
+            while ($exception) {
+                $code = if ($exception -is [System.ComponentModel.Win32Exception]) { $exception.NativeErrorCode } else { $exception.HResult -band 0xFFFF }
+                if ($code -in @(5, 32, 33)) { $retryable = $true; break }
+                $exception = $exception.InnerException
+            }
+            if (-not $retryable -or $elapsed.Elapsed.TotalSeconds -ge 5) { throw }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+}
+
+function Write-Status([string]$state, [string]$message, [int]$phase, $report = $null, [switch]$SerialOnly) {
     $value = @{ state=$state; message=$message; phase=$phase; graphics_report=$report; updated_at=[DateTime]::UtcNow.ToString('o') }
     try {
-        New-Item -ItemType Directory -Path $work -Force | Out-Null
-        $value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath ($statusPath + '.tmp') -Encoding UTF8
-        Move-Item -LiteralPath ($statusPath + '.tmp') -Destination $statusPath -Force
+        if (-not $SerialOnly) {
+            Write-WorkFile ($statusPath + '.tmp') ($value | ConvertTo-Json -Depth 20)
+            Publish-SetupStatus
+        }
     } finally {
         # Report over serial even if saving the status file fails.
         $port = [System.IO.Ports.SerialPort]::new('COM1', 115200)
@@ -96,6 +181,76 @@ function Install-Virtio {
     Start-Service -Name 'QEMU-GA'
 }
 
+function Import-DriverCertificate([string]$path) {
+    $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($path)
+    $importTaskName = 'VirtueImportCertificate-' + [Guid]::NewGuid().ToString('N')
+    $resultPath = Join-Path $work ($importTaskName + '.txt')
+    $registered = $false
+    try {
+        $thumbprint = $certificate.Thumbprint
+        if ((Test-Path -LiteralPath "Cert:\LocalMachine\Root\$thumbprint") -and
+            (Test-Path -LiteralPath "Cert:\LocalMachine\TrustedPublisher\$thumbprint")) { return }
+        # Some guests restrict TrustedPublisher writes even for elevated administrators.
+        # Run only this import as SYSTEM; graphics probing must stay interactive.
+        $command = @'
+$ErrorActionPreference = 'Stop'
+$message = ''
+$certificate = $null
+try {
+    $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String('__CERTIFICATE__'))
+    foreach ($name in @('Root', 'TrustedPublisher')) {
+        $store = [System.Security.Cryptography.X509Certificates.X509Store]::new($name, 'LocalMachine')
+        try {
+            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            if (-not $store.Certificates.Find('FindByThumbprint', $certificate.Thumbprint, $false).Count) {
+                $store.Add($certificate)
+            }
+            if (-not $store.Certificates.Find('FindByThumbprint', $certificate.Thumbprint, $false).Count) {
+                throw 'The certificate is missing after import.'
+            }
+        } finally { $store.Dispose() }
+    }
+} catch {
+    $message = "Certificate import failed ($name): $($_.Exception.Message)"
+} finally {
+    if ($certificate) { $certificate.Dispose() }
+}
+[System.IO.File]::WriteAllText('__RESULT_PATH__.tmp', $message)
+[System.IO.File]::Move('__RESULT_PATH__.tmp', '__RESULT_PATH__')
+if ($message) { exit 1 }
+'@
+        $command = $command.Replace('__CERTIFICATE__', [Convert]::ToBase64String($certificate.RawData)).Replace('__RESULT_PATH__', $resultPath.Replace("'", "''"))
+        $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+        $action = New-ScheduledTaskAction -Execute (Join-Path $PSHOME 'powershell.exe') -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $encoded"
+        $principal = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
+        Register-ScheduledTask -TaskName $importTaskName -Action $action -Principal $principal | Out-Null
+        $registered = $true
+        Start-ScheduledTask -TaskName $importTaskName
+        $deadline = [DateTime]::UtcNow.AddSeconds(60)
+        do {
+            if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
+                $message = [System.IO.File]::ReadAllText($resultPath)
+                if ($message) { throw $message }
+                foreach ($name in @('Root', 'TrustedPublisher')) {
+                    if (-not (Test-Path -LiteralPath "Cert:\LocalMachine\$name\$thumbprint")) {
+                        throw "The driver signing certificate is missing from LocalMachine\$name after import."
+                    }
+                }
+                return
+            }
+            Start-Sleep -Milliseconds 250
+        } while ([DateTime]::UtcNow -lt $deadline)
+        throw 'Windows did not finish importing the driver signing certificate within 60 seconds.'
+    } finally {
+        if ($registered) {
+            Stop-ScheduledTask -TaskName $importTaskName -ErrorAction SilentlyContinue
+            Unregister-ScheduledTask -TaskName $importTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $resultPath, ($resultPath + '.tmp') -Force -ErrorAction SilentlyContinue
+        $certificate.Dispose()
+    }
+}
+
 function Install-Yttrium {
     $workRoot = [System.IO.Path]::GetFullPath($work).TrimEnd('\')
     $drivers = [System.IO.Path]::GetFullPath((Join-Path $workRoot ('Drivers-' + [Guid]::NewGuid().ToString('N'))))
@@ -105,8 +260,7 @@ function Install-Yttrium {
         $certificate = Get-ChildItem -LiteralPath $drivers -Recurse -Filter 'VirtIOTestCert.cer' | Select-Object -First 1
         if (-not $certificate) { throw 'The verified Yttrium archive is missing its signing certificate.' }
         Write-Status 'installing' 'Importing the Yttrium driver signing certificate…' 2
-        Import-Certificate -FilePath $certificate.FullName -CertStoreLocation 'Cert:\LocalMachine\Root' | Out-Null
-        Import-Certificate -FilePath $certificate.FullName -CertStoreLocation 'Cert:\LocalMachine\TrustedPublisher' | Out-Null
+        Import-DriverCertificate $certificate.FullName
         $infs = @(Get-ChildItem -LiteralPath $drivers -Recurse -Filter '*.inf' | Where-Object { $_.FullName -notmatch '\\(x86|i386|arm64)\\' })
         if (-not $infs.Count) { throw 'The verified Yttrium archive is missing the x64 graphics driver.' }
         Write-Status 'installing' 'Installing Yttrium graphics drivers…' 2
@@ -121,9 +275,10 @@ function Install-Yttrium {
 
 function Register-Resume {
     $script = Join-Path $work 'Install-VirtueGuest.ps1'
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`" -Resume"
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User 'Virtue'
-    $principal = New-ScheduledTaskPrincipal -UserId 'Virtue' -LogonType Interactive -RunLevel Highest
+    $userId = [System.Security.Principal.NTAccount]::new($env:COMPUTERNAME, 'Virtue').Translate([System.Security.Principal.SecurityIdentifier]).Value
+    $action = New-ScheduledTaskAction -Execute (Join-Path $PSHOME 'powershell.exe') -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`" -Resume"
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
+    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Highest
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
 }
 
@@ -138,7 +293,59 @@ function Enable-AutomaticLogon {
     Set-ItemProperty -LiteralPath $logon -Name AutoAdminLogon -Value '1'
 }
 
+function Test-SetupUserSession([string]$account) {
+    if (-not ('VirtueSessionQuery' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class VirtueSessionQuery {
+    [StructLayout(LayoutKind.Sequential)] struct Session {
+        public int Id; public IntPtr Name; public int State;
+    }
+    [DllImport("wtsapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern bool WTSEnumerateSessions(IntPtr server, int reserved, int version, out IntPtr sessions, out int count);
+    [DllImport("wtsapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern bool WTSQuerySessionInformation(IntPtr server, int id, int info, out IntPtr buffer, out int bytes);
+    [DllImport("wtsapi32.dll")] static extern void WTSFreeMemory(IntPtr buffer);
+    static string Read(int id, int info) {
+        IntPtr buffer; int bytes;
+        if (!WTSQuerySessionInformation(IntPtr.Zero, id, info, out buffer, out bytes))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        try { return Marshal.PtrToStringUni(buffer) ?? ""; }
+        finally { if (buffer != IntPtr.Zero) WTSFreeMemory(buffer); }
+    }
+    public static bool IsSignedIn(string account) {
+        IntPtr sessions; int count;
+        if (!WTSEnumerateSessions(IntPtr.Zero, 0, 1, out sessions, out count))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        try {
+            int size = Marshal.SizeOf(typeof(Session));
+            for (int i = 0; i < count; i++) {
+                Session session = (Session)Marshal.PtrToStructure(IntPtr.Add(sessions, i * size), typeof(Session));
+                if (session.State >= 6) continue;
+                string user = Read(session.Id, 5);
+                if (user.Length == 0) continue;
+                string domain = Read(session.Id, 7);
+                if (domain.Length == 0) domain = Environment.MachineName;
+                if (String.Equals(domain + "\\" + user, account, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        } finally { WTSFreeMemory(sessions); }
+    }
+}
+'@
+    }
+    return [VirtueSessionQuery]::IsSignedIn($account)
+}
+
 function Start-Resume {
+    $localUser = "$env:COMPUTERNAME\Virtue"
+    if (-not (Test-SetupUserSession $localUser)) {
+        Write-Status 'installing' 'Restarting Windows to sign in and resume setup automatically…' $phase
+        Restart-Computer -Force
+        return
+    }
     $previousStatus = Get-Content -LiteralPath $statusPath -Raw
     Start-ScheduledTask -TaskName $taskName
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
@@ -189,24 +396,27 @@ function Test-Graphics {
     throw "The graphics driver did not pass its hardware rendering check. $lastFailure"
 }
 
-$phase = 1
-try {
-    $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        try {
-            if ($Resume -or ($Repair -and (Test-Path -LiteralPath $statusPath))) {
-                $phase = (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).phase
-            }
-            Write-Status 'installing' 'Waiting for administrator approval inside Windows…' $phase
-        } catch {
-            Write-Warning 'Could not report the administrator prompt; requesting elevation anyway.'
-        }
-        $arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-        if ($Resume) { $arguments += ' -Resume' }
-        if ($Repair) { $arguments += ' -Repair' }
+$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    $arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    if ($Resume) { $arguments += ' -Resume' }
+    if ($Repair) { $arguments += ' -Repair' }
+    try {
         $elevated = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
-        exit $elevated.ExitCode
+        try { exit $elevated.ExitCode } finally { $elevated.Dispose() }
+    } catch {
+        $message = "Windows setup requires administrator approval: $($_.Exception.Message)"
+        Write-Status 'error' $message 1 -SerialOnly
+        Write-Error $message -ErrorAction Continue
+        exit 1
     }
+}
+
+$phase = 1
+$workReady = $false
+try {
+    Initialize-WorkDirectory
+    $workReady = $true
     if ($Resume -or ($Repair -and (Test-Path -LiteralPath $statusPath))) {
         $phase = (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).phase
     }
@@ -223,7 +433,12 @@ try {
             Write-Status 'installing' 'Installing Windows integration drivers…' 1
         }
         foreach ($name in @('Install-VirtueGuest.ps1', 'Collect-VirtueGpuReport.ps1', 'windows-account.json', 'asset-checksums.json', 'YttriumDrivers.zip', 'VulkanRT.exe')) {
-            Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $work $name) -Force
+            $source = Join-Path $PSScriptRoot $name
+            $destination = Join-Path $work $name
+            if ([System.IO.Path]::GetFullPath($source) -ne [System.IO.Path]::GetFullPath($destination)) {
+                Copy-SetupFile $source $destination
+            }
+            Set-Acl -LiteralPath $destination -AclObject (New-WorkSecurity $false)
         }
         $hashes = Get-Content -LiteralPath (Join-Path $work 'asset-checksums.json') -Raw | ConvertFrom-Json
         foreach ($asset in @(@('YttriumDrivers.zip', $hashes.guest), @('VulkanRT.exe', $hashes.vulkan))) {
@@ -259,7 +474,7 @@ try {
         if ($installer.ExitCode -notin @(0, 3010)) { throw 'The Vulkan runtime did not install successfully.' }
         # Record installed versions only after both installers have succeeded.
         $hashes = Get-Content -LiteralPath (Join-Path $work 'asset-checksums.json') -Raw | ConvertFrom-Json
-        @{ guest=$hashes.guest; vulkan=$hashes.vulkan } | ConvertTo-Json | Set-Content -LiteralPath ($installedAssetsPath + '.tmp') -Encoding UTF8
+        Write-WorkFile ($installedAssetsPath + '.tmp') (@{ guest=$hashes.guest; vulkan=$hashes.vulkan } | ConvertTo-Json)
         Move-Item -LiteralPath ($installedAssetsPath + '.tmp') -Destination $installedAssetsPath -Force
         Write-Status 'installing' 'Checking accelerated graphics after restart…' 3
         Restart-Computer -Force
@@ -279,9 +494,13 @@ try {
     if ($failure.InvocationInfo.ScriptLineNumber -gt 0) {
         $message += ' (guest setup line {0})' -f $failure.InvocationInfo.ScriptLineNumber
     }
-    Write-Status 'error' $message $phase
-    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
-        Disable-ScheduledTask -TaskName $taskName | Out-Null
-    }
+    try { Write-Status 'error' $message $phase -SerialOnly:(-not $workReady) }
+    catch { Write-Warning "Could not save the setup failure: $($_.Exception.Message)" }
+    Write-Error $message -ErrorAction Continue
+    try {
+        if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+            Disable-ScheduledTask -TaskName $taskName | Out-Null
+        }
+    } catch { Write-Warning 'Could not disable the failed setup task.' }
     exit 1
 }
