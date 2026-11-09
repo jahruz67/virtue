@@ -75,16 +75,31 @@ class VMService:
         config.validate(host_memory_mib=self.host.memory_mib, host_cpus=self.host.cpus,
                         check_media=True, other_memory_mib=other_memory)
 
+    @staticmethod
+    def _setup_progress(directory: Path) -> dict:
+        path = directory / "setup-progress.json"
+        if path.is_symlink():
+            raise ValidationError("Setup progress must not be a symbolic link.")
+        if not path.is_file():
+            return {}
+        try:
+            if path.stat().st_size > 128 * 1024:
+                raise ValueError("Report is too large")
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise ValueError("Expected a setup report")
+            return value
+        except (OSError, ValueError) as exc:
+            raise ValidationError("Cannot read setup progress. Preserve this VM and repair its setup-progress.json before retrying.") from exc
+
     def _view(self, config: VMConfig) -> dict:
         result = config.to_dict()
         status = self.backend.status(config.id)
         if "graphics" in status:
             status["active_graphics"] = status.pop("graphics")
         result.update(status)
-        setup_path = self.store.directory(config.id) / "setup-progress.json"
-        if config.auto_setup and not config.installed and setup_path.is_file() and not setup_path.is_symlink():
-            if setup_path.stat().st_size <= 128 * 1024:
-                result["setup"] = json.loads(setup_path.read_text(encoding="utf-8"))
+        if config.auto_setup and not config.installed:
+            result["setup"] = self._setup_progress(self.store.directory(config.id))
         disk = self.store.directory(config.id) / "disk.qcow2"
         if disk.exists():
             stat = disk.stat()
@@ -111,11 +126,16 @@ class VMService:
 
     def _reconcile_setup(self, config):
         directory = self.store.directory(config.id)
-        if not (directory / "virtue-setup.iso").is_file():
+        if not ((directory / "virtue-setup.iso").is_file() or (directory / "virtue-repair.iso").is_file()):
             return config
         progress = self.backend.setup_status(config.id)
         if not progress:
             return config
+        saved = self._setup_progress(directory)
+        if "repair_previous_status" in saved:
+            signature = {key: progress.get(key) for key in ("state", "phase", "message", "updated_at")}
+            if type(progress.get("phase")) is not int or signature == saved["repair_previous_status"]:
+                return config
         report = progress.pop("graphics_report", None)
         if progress.get("state") == "ready":
             from .graphics import classify_guest_report
@@ -156,12 +176,41 @@ class VMService:
             config = self.store.load(vm_id)
             if not config.auto_setup or config.installed:
                 raise ValidationError("This Windows environment has no unfinished automatic installation.")
+            saved = self._setup_progress(self.store.directory(vm_id))
+            if type(saved.get("phase")) is int and 1 <= saved["phase"] <= 3:
+                return self._retry_installed_setup(config, assets, saved, progress)
             if self.backend.status(vm_id).get("state") == "stopped":
                 from .provisioning import prepare_windows
                 prepare_windows(config, self.store.directory(vm_id), assets, progress)
                 self.store.save(config)
                 return self.backend.start(config)
             return self.backend.retry_setup(vm_id)
+
+    def _retry_installed_setup(self, config, assets, saved, progress):
+        from .provisioning import prepare_repair
+        directory = self.store.directory(config.id)
+        repair_iso = prepare_repair(directory, assets, progress)
+        pending = {"state": "installing", "phase": saved["phase"],
+                   "message": "Applying updated setup components to the existing Windows installation…",
+                   "repair_previous_status": saved.get("repair_previous_status", {
+                       key: saved.get(key) for key in ("state", "phase", "message", "updated_at")})}
+        atomic_json(directory / "setup-progress.json", pending)
+        try:
+            if self.backend.status(config.id).get("state") == "stopped":
+                progress("Starting your existing Windows installation for repair…")
+                self.backend.start(config)
+            progress("Resuming Windows driver and graphics setup…")
+            if not self.backend.retry_setup(config.id, repair_iso=repair_iso):
+                pending.update(state="error", message=(
+                    "The updated setup disc is ready. Windows integration is not available yet. "
+                    "Once the Windows desktop appears, retry automatic setup, or open the VIRTUE_SETUP disc "
+                    "in Windows and double-click Retry setup.cmd. Approve administrator access if asked. "
+                    "This resumes driver setup without reinstalling Windows."))
+                atomic_json(directory / "setup-progress.json", pending)
+        except Exception as exc:
+            pending.update(state="error", message=str(exc))
+            atomic_json(directory / "setup-progress.json", pending)
+            raise
 
     def windows_credentials(self, vm_id: str) -> dict:
         self.store.load(vm_id)

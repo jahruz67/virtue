@@ -82,6 +82,16 @@ class QemuCommandTests(unittest.TestCase):
         assert "ide-cd,bus=ide.2,drive=virtue_setup" in devices
         assert "isa-serial,chardev=setup_status" in devices
 
+    def test_repair_boot_uses_existing_disk_without_windows_installer(self):
+        config = self.config(auto_setup=True, drivers_iso_path="/cache/virtio.iso")
+        cmd = self.command(config, setup_iso="/data/virtue-repair.iso", repair_setup=True)
+        assert "installer" not in " ".join(cmd)
+        assert not any("Windows,,11.iso" in arg for arg in cmd)
+        assert any("virtue-repair.iso" in arg for arg in cmd)
+        block = json.loads(cmd[cmd.index("-blockdev") + 1])
+        assert block["file"]["filename"] == str(Path("/data/Windows, VM") / "disk.qcow2")
+        assert not config.installed
+
 
 if __name__ == "__main__":
     unittest.main()

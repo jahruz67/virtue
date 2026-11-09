@@ -149,3 +149,92 @@ def test_ready_requires_observed_hardware_rendering(tmp_path):
     report["opengl"]["renderer"] = "zink Vulkan (Virtio-GPU Venus (Intel Arc))"
     assert service._reconcile_setup(config).installed
     assert store.load(config.id).iso_path == ""
+
+
+def test_repair_media_refreshes_scripts_without_windows_installation_answers(tmp_path, monkeypatch):
+    directory = tmp_path / "vm"
+    directory.mkdir()
+    disk = directory / "disk.qcow2"
+    disk.write_bytes(b"existing Windows and user files")
+    credentials = directory / "windows-credentials.json"
+    credentials.write_text('{"username":"Virtue","password":"keep-existing"}')
+    account_before = credentials.read_bytes()
+    guest = tmp_path / "guest"
+    guest.mkdir()
+    for name in ("Install-VirtueGuest.ps1", "Collect-VirtueGpuReport.ps1", "Retry setup.cmd"):
+        (guest / name).write_text("version 1")
+    assets = {"guest": tmp_path / "drivers.zip", "vulkan": tmp_path / "VulkanRT.exe"}
+    for path in assets.values():
+        path.write_bytes(b"verified payload")
+    monkeypatch.setattr(provisioning, "support_folder", lambda name: guest)
+    monkeypatch.setattr(provisioning, "asset_specs", lambda: {})
+
+    def make_iso(args):
+        files = Path(args[-1])
+        assert not (files / "Autounattend.xml").exists()
+        assert (files / "Retry setup.cmd").is_file()
+        assert (files / "setup-version.txt").read_text() == provisioning.repair_version()
+        assert (files / "windows-account.json").read_bytes() == account_before
+        Path(args[args.index("-o") + 1]).write_bytes((files / "Install-VirtueGuest.ps1").read_bytes())
+
+    monkeypatch.setattr(provisioning, "run_setup", make_iso)
+    target = provisioning.prepare_repair(directory, assets)
+    assert target.read_text() == "version 1"
+    (guest / "Install-VirtueGuest.ps1").write_text("updated version")
+    assert provisioning.prepare_repair(directory, assets).read_text() == "updated version"
+    assert disk.read_bytes() == b"existing Windows and user files"
+    assert credentials.read_bytes() == account_before
+
+
+@pytest.mark.parametrize("state", ["running", "stopped"])
+@pytest.mark.parametrize("agent_available", [True, False])
+def test_retry_repairs_existing_windows_and_preserves_recovery_instructions(tmp_path, monkeypatch, state, agent_available):
+    from virtue.services import VMService
+    from virtue.store import VMStore, atomic_json
+
+    store = VMStore(tmp_path)
+    config = VMConfig.new({"name": "Windows", "iso_path": "/removed/Windows.iso"})
+    store.save(config)
+    directory = store.directory(config.id)
+    (directory / "disk.qcow2").write_bytes(b"keep Windows")
+    (directory / "windows-credentials.json").write_text('{"password":"keep"}')
+    before = {name: (directory / name).read_bytes() for name in ("disk.qcow2", "config.json", "windows-credentials.json")}
+    guest_status = {"state": "error", "phase": 1, "message": "Access is denied (0x80070005)"}
+    atomic_json(directory / "setup-progress.json", guest_status)
+    calls = []
+
+    def prepare_repair(target, assets, progress):
+        repair_iso = target / "virtue-repair.iso"
+        repair_iso.write_bytes(b"updated repair-only media")
+        return repair_iso
+
+    def resume(vm_id, repair_iso=None):
+        assert vm_id == config.id
+        assert repair_iso == directory / "virtue-repair.iso"
+        calls.append("resume")
+        return agent_available
+
+    backend = SimpleNamespace(status=lambda vm_id: {"state": state},
+                              start=lambda config: calls.append("start"), retry_setup=resume,
+                              setup_status=lambda vm_id: dict(guest_status))
+    service = VMService(store, backend=backend)
+    monkeypatch.setattr(service, "prepare_host", lambda progress: {})
+    monkeypatch.setattr(provisioning, "prepare_repair", prepare_repair)
+    monkeypatch.setattr(provisioning, "prepare_windows", lambda *args: pytest.fail("Windows must not be reinstalled"))
+    service.retry_setup(config.id)
+    assert calls == (["start", "resume"] if state == "stopped" else ["resume"])
+    assert all((directory / name).read_bytes() == data for name, data in before.items())
+    saved = service._setup_progress(directory)
+    assert saved["phase"] == 1
+    if not agent_available:
+        assert saved["state"] == "error" and "Retry setup.cmd" in saved["message"]
+    service._reconcile_setup(config)
+    assert service._setup_progress(directory) == saved
+    guest_status["updated_at"] = "new-repair-attempt"
+    service._reconcile_setup(config)
+    assert service._setup_progress(directory)["state"] == "error"
+    assert "repair_previous_status" not in service._setup_progress(directory)
+    guest_status.update(state="installing", message="Resuming Windows setup with updated components…")
+    service._reconcile_setup(config)
+    assert service._setup_progress(directory)["message"] == guest_status["message"]
+    assert "repair_previous_status" not in service._setup_progress(directory)

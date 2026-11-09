@@ -214,6 +214,36 @@ class BackendRecoveryTests(unittest.TestCase):
         self.assertEqual((target / "user-note.txt").read_text(), "preserve")
         self.assertFalse((target / "disk.qcow2").exists())
 
+    def test_repair_replaces_setup_media_and_detaches_windows_installer_without_agent(self):
+        repair_iso = self.directory / "virtue-repair.iso"
+        repair_iso.write_bytes(b"updated repair media")
+        commands = []
+
+        def execute(command, arguments=None):
+            commands.append((command, arguments))
+            if command == "query-block":
+                return [{"device": "installer"}, {"device": "virtue_setup"}, {"device": "osdisk"}]
+
+        client = SimpleNamespace(execute=execute, close=lambda: None)
+        with patch.object(self.backend, "_qmp", return_value=client), \
+             patch.object(self.backend, "_resume_guest_setup", side_effect=OSError("agent unavailable")):
+            self.assertFalse(self.backend.retry_setup(self.config.id, repair_iso=repair_iso))
+        self.assertIn(("eject", {"device": "installer", "force": True}), commands)
+        self.assertIn(("blockdev-change-medium", {"device": "virtue_setup", "filename": str(repair_iso), "format": "raw"}), commands)
+        self.assertEqual((self.directory / "disk.qcow2").read_bytes(), b"disk-before")
+
+    def test_repair_boot_selects_repair_media_without_stale_file_bind_or_windows_iso(self):
+        self.config.auto_setup, self.config.installed = True, False
+        self.config.iso_path = "/removed/Windows.iso"
+        repair_iso = self.directory / "virtue-repair.iso"
+        repair_iso.write_bytes(b"updated repair media")
+        self.backend.host = SimpleNamespace(yttrium_ready=True, yttrium_prefix=["flatpak", "run", "org.qemu.yttrium"])
+        self.assertEqual(self.backend._setup_iso(self.config, self.directory), repair_iso)
+        prefix = self.backend._prefix("yttrium", self.directory, self.root / "runtime", self.config)
+        self.assertIn(f"--filesystem={self.directory}", prefix)
+        self.assertNotIn(f"--filesystem={repair_iso}:ro", prefix)
+        self.assertNotIn(self.config.iso_path, " ".join(prefix))
+
     def test_invalid_manifest_cannot_restore(self):
         self.backend.snapshot(self.config, "saved")
         manifest = self.directory / "snapshots" / "saved" / "manifest.json"

@@ -1,6 +1,7 @@
 """Prepare unattended installation media without altering the supplied ISO."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import secrets
@@ -12,7 +13,7 @@ from xml.sax.saxutils import escape
 
 from .domain import ValidationError
 from .runtime import support_folder
-from .setup import asset_specs, run_setup
+from .setup import asset_specs, file_digest, run_setup
 from .store import atomic_json
 
 
@@ -58,6 +59,47 @@ def answer_file(config, image: dict, password: str) -> str:
     return template
 
 
+def repair_version() -> str:
+    guest = support_folder("guest")
+    version = {name: file_digest(guest / name) for name in (
+        "Install-VirtueGuest.ps1", "Collect-VirtueGpuReport.ps1", "Retry setup.cmd")}
+    version["assets"] = {key: spec["sha256"] for key, spec in asset_specs().items()}
+    return hashlib.sha256(json.dumps(version, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _write_setup_media(target: Path, credentials: Path, assets: dict[str, Path], answer: str | None = None) -> None:
+    with tempfile.TemporaryDirectory(prefix=".guest-setup-", dir=target.parent) as temporary:
+        files = Path(temporary) / "files"
+        files.mkdir()
+        if answer is not None:
+            (files / "Autounattend.xml").write_text(answer, encoding="utf-8", newline="\n")
+        else:
+            shutil.copy2(support_folder("guest") / "Retry setup.cmd", files / "Retry setup.cmd")
+            (files / "setup-version.txt").write_text(repair_version(), encoding="utf-8")
+        shutil.copy2(credentials, files / "windows-account.json")
+        for name in ("Install-VirtueGuest.ps1", "Collect-VirtueGpuReport.ps1"):
+            shutil.copy2(support_folder("guest") / name, files / name)
+        shutil.copy2(assets["guest"], files / "YttriumDrivers.zip")
+        shutil.copy2(assets["vulkan"], files / "VulkanRT.exe")
+        (files / "asset-checksums.json").write_text(json.dumps({key: spec["sha256"] for key, spec in asset_specs().items()}), encoding="utf-8")
+        staged_iso = Path(temporary) / "setup.iso"
+        run_setup(["xorriso", "-as", "mkisofs", "-quiet", "-J", "-r", "-V", "VIRTUE_SETUP", "-o", str(staged_iso), str(files)])
+        staged_iso.chmod(0o600)
+        staged_iso.replace(target)
+
+
+def prepare_repair(directory: Path, assets: dict[str, Path], progress=lambda message: None) -> Path:
+    target = directory / "virtue-repair.iso"
+    credentials = directory / "windows-credentials.json"
+    if target.is_symlink() or credentials.is_symlink():
+        raise ValidationError("Automatic setup files must not be symbolic links.")
+    if not credentials.is_file():
+        raise ValidationError("The existing Windows account details are missing. Preserve this VM and restore windows-credentials.json before retrying setup.")
+    progress("Preparing updated drivers and setup tools for your existing Windows installation…")
+    _write_setup_media(target, credentials, assets)
+    return target
+
+
 def prepare_windows(config, directory: Path, assets: dict[str, Path], progress=lambda message: None) -> None:
     if not config.auto_setup or config.installed:
         return
@@ -76,19 +118,6 @@ def prepare_windows(config, directory: Path, assets: dict[str, Path], progress=l
     else:
         password = "V!" + secrets.token_urlsafe(24)
         atomic_json(credentials, {"username": "Virtue", "password": password})
-    with tempfile.TemporaryDirectory(prefix=".guest-setup-", dir=directory) as temporary:
-        files = Path(temporary) / "files"
-        files.mkdir()
-        (files / "Autounattend.xml").write_text(answer_file(config, image, password), encoding="utf-8", newline="\n")
-        shutil.copy2(credentials, files / "windows-account.json")
-        for name in ("Install-VirtueGuest.ps1", "Collect-VirtueGpuReport.ps1"):
-            shutil.copy2(support_folder("guest") / name, files / name)
-        shutil.copy2(assets["guest"], files / "YttriumDrivers.zip")
-        shutil.copy2(assets["vulkan"], files / "VulkanRT.exe")
-        (files / "asset-checksums.json").write_text(json.dumps({key: spec["sha256"] for key, spec in asset_specs().items()}), encoding="utf-8")
-        progress("Preparing automatic Windows and driver installation…")
-        staged_iso = Path(temporary) / "setup.iso"
-        run_setup(["xorriso", "-as", "mkisofs", "-quiet", "-J", "-r", "-V", "VIRTUE_SETUP", "-o", str(staged_iso), str(files)])
-        staged_iso.chmod(0o600)
-        staged_iso.replace(target)
+    progress("Preparing automatic Windows and driver installation…")
+    _write_setup_media(target, credentials, assets, answer_file(config, image, password))
     atomic_json(directory / "setup-progress.json", {"state": "installing", "message": "Installing Windows automatically…"})

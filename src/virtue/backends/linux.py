@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
+import base64
 import json
 import hashlib
 import os
@@ -373,6 +374,15 @@ class LinuxBackend:
             if self._identity_matches(metadata, key):
                 raise BackendError("A VM helper did not terminate; no storage changes were performed.")
 
+    @staticmethod
+    def _setup_iso(config: Any, directory: Path) -> Path | None:
+        if not getattr(config, "auto_setup", False) or config.installed:
+            return None
+        repair = directory / "virtue-repair.iso"
+        if repair.is_symlink():
+            raise BackendError("Repair media must not be a symbolic link.")
+        return repair if repair.is_file() else directory / "virtue-setup.iso"
+
     def _prefix(self, graphics: str, directory: Path, runtime: Path, config: Any) -> list[str]:
         host = self._host()
         if graphics != "yttrium":
@@ -385,12 +395,13 @@ class LinuxBackend:
         if Path(prefix[0]).name == "flatpak" and "run" in prefix:
             index = prefix.index("run") + 1
             grants = [f"--filesystem={directory}", f"--filesystem={runtime}"]
-            for iso in (config.iso_path if not config.installed else "", config.drivers_iso_path):
+            setup_iso = self._setup_iso(config, directory)
+            repairing = bool(setup_iso and setup_iso.name == "virtue-repair.iso")
+            for iso in (config.iso_path if not config.installed and not repairing else "", config.drivers_iso_path):
                 if iso:
                     grants.append(f"--filesystem={Path(iso).resolve()}:ro")
-            setup_iso = directory / "virtue-setup.iso"
-            if getattr(config, "auto_setup", False) and not config.installed and setup_iso.is_file():
-                grants.append(f"--filesystem={setup_iso}:ro")
+            # The directory grant keeps atomically replaced repair media visible;
+            # a separate file bind mount would retain the old ISO inode.
             prefix[index:index] = grants
         return prefix
 
@@ -452,14 +463,15 @@ class LinuxBackend:
                     raise BackendError("Managed VM files and directories must not be symbolic links.")
             if not (directory / "disk.qcow2").is_file():
                 raise BackendError("The Windows virtual disk is missing.")
-            for iso in (config.iso_path if not config.installed else "", config.drivers_iso_path):
+            setup_iso = self._setup_iso(config, directory)
+            repairing = bool(setup_iso and setup_iso.name == "virtue-repair.iso")
+            for iso in (config.iso_path if not config.installed and not repairing else "", config.drivers_iso_path):
                 if iso and not Path(iso).is_file():
                     raise BackendError(f"The attached installation media is missing: {iso}. Reattach it in Settings.")
             runtime = self._runtime_dir(config.id)
             for name in ("qmp.sock", "tpm.sock", "qga.sock", "qemu.pid"):
                 (runtime / name).unlink(missing_ok=True)
             graphics = "safe" if safe_graphics else config.graphics
-            setup_iso = directory / "virtue-setup.iso" if getattr(config, "auto_setup", False) and not config.installed else None
             if setup_iso and not setup_iso.is_file():
                 raise BackendError("Automatic Windows installation media is missing. Retry setup in the app.")
             prefix = self._prefix(graphics, directory, runtime, config)
@@ -472,7 +484,7 @@ class LinuxBackend:
                                          safe_graphics=safe_graphics, audio_backend=audio_backend,
                                          hyperv=hyperv,
                                          accelerator=getattr(host, "yttrium_accel", "kvm") if graphics == "yttrium" else "kvm",
-                                         guest_agent_socket=runtime / "qga.sock", setup_iso=setup_iso)
+                                         guest_agent_socket=runtime / "qga.sock", setup_iso=setup_iso, repair_setup=repairing)
             command += ["-pidfile", str(runtime / "qemu.pid")]
             metadata = {"vm_id": config.id, "qmp": str(runtime / "qmp.sock"), "graphics": graphics,
                         "machine_type": config.machine_type, "hyperv_flags": hyperv,
@@ -511,7 +523,7 @@ class LinuxBackend:
                             raise BackendError("QEMU did not enable hardware KVM acceleration.")
                     finally:
                         client.close()
-                    if setup_iso and not (directory / "setup-boot-started").exists():
+                    if setup_iso and not repairing and not (directory / "setup-boot-started").exists():
                         # Windows DVDs can ask for a key before reading the answer file.
                         for _ in range(3):
                             time.sleep(3)
@@ -571,19 +583,61 @@ class LinuxBackend:
         except (OSError, ValueError, KeyError, TypeError):
             return {"state": "installing", "message": "Installing Windows and its integration drivers…"}
 
-    def retry_setup(self, vm_id: str):
+    def _replace_setup_media(self, client: QMPClient, repair_iso: Path):
+        devices = {item.get("device") for item in client.execute("query-block")}
+        if "virtue_setup" not in devices:
+            raise BackendError("The running VM has no setup drive. Shut down Windows and retry automatic setup.")
+        if "installer" in devices:
+            client.execute("eject", {"device": "installer", "force": True})
+        client.execute("blockdev-open-tray", {"device": "virtue_setup", "force": True})
+        client.execute("blockdev-change-medium", {"device": "virtue_setup", "filename": str(repair_iso), "format": "raw"})
+
+    def retry_setup(self, vm_id: str, repair_iso: Path | None = None) -> bool:
+        with self._lock(vm_id) as directory:
+            if repair_iso is not None:
+                repair_iso = Path(repair_iso)
+                if repair_iso.is_symlink() or repair_iso.resolve() != (directory / "virtue-repair.iso").resolve() or not repair_iso.is_file():
+                    raise BackendError("Repair media must be the VM's private virtue-repair.iso.")
+            client = self._qmp(vm_id)
+            try:
+                if repair_iso is not None:
+                    self._replace_setup_media(client, repair_iso)
+            finally:
+                client.close()
+            try:
+                self._resume_guest_setup(vm_id, repair=repair_iso is not None)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                if repair_iso is not None:
+                    return False
+                raise BackendError("Windows integration is unavailable. Wait for Windows to finish starting and retry setup.") from exc
+            return True
+
+    def _resume_guest_setup(self, vm_id: str, *, repair: bool):
         from .guest_agent import GuestAgent
-        client = self._qmp(vm_id)
-        client.close()
         command = "$ErrorActionPreference='Stop'; Enable-ScheduledTask -TaskName VirtueFinishSetup; Start-ScheduledTask -TaskName VirtueFinishSetup"
+        if repair:
+            from virtue.provisioning import repair_version
+            version_check = "(Get-Content -LiteralPath (Join-Path $_.RootDirectory.FullName 'setup-version.txt') -Raw -ErrorAction SilentlyContinue) -eq '" + repair_version() + "'"
+            command = ("$ErrorActionPreference='Stop'; "
+                       "$deadline=[DateTime]::UtcNow.AddSeconds(30); $media=$null; do { "
+                       "$media=[System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady -and $_.VolumeLabel -eq 'VIRTUE_SETUP' -and (" + version_check + ") } | Select-Object -First 1; "
+                       "if (-not $media) { Start-Sleep -Milliseconds 250 } "
+                       "} while (-not $media -and [DateTime]::UtcNow -lt $deadline); "
+                       "if (-not $media) { throw 'Updated Virtue setup media is not ready. Wait for Windows to detect the disc and retry.' }; "
+                       "& (Join-Path $media.RootDirectory.FullName 'Install-VirtueGuest.ps1') -Repair")
         with GuestAgent(self._runtime_dir(vm_id) / "qga.sock") as agent:
             process = agent.execute("guest-exec", {"path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
                                     "arg": ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", command], "capture-output": True})
-            for _ in range(20):
+            deadline = time.monotonic() + (120 if repair else 5)
+            while time.monotonic() < deadline:
                 result = agent.execute("guest-exec-status", {"pid": process["pid"]})
                 if result.get("exited"):
                     if result.get("exitcode") != 0:
-                        raise BackendError("Windows could not resume automatic setup. Its setup report has been preserved.")
+                        try:
+                            detail = base64.b64decode(result.get("err-data") or result.get("out-data") or "", validate=True).decode("utf-8", errors="replace").strip()[-4000:]
+                        except (ValueError, TypeError):
+                            detail = ""
+                        raise BackendError("Windows could not resume automatic setup. " + (detail or "Its setup report has been preserved."))
                     return
                 time.sleep(0.25)
             raise BackendError("Windows did not acknowledge the automatic setup retry.")

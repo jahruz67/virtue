@@ -1,13 +1,13 @@
 # Invoked automatically by Windows Setup and the temporary logon task.
 [CmdletBinding()]
-param([switch]$Resume)
+param([switch]$Resume, [switch]$Repair)
 $ErrorActionPreference = 'Stop'
 $work = Join-Path $env:ProgramData 'Virtue'
 $statusPath = Join-Path $work 'setup-status.json'
 $taskName = 'VirtueFinishSetup'
 
 function Write-Status([string]$state, [string]$message, [int]$phase, $report = $null) {
-    $value = @{ state=$state; message=$message; phase=$phase; graphics_report=$report }
+    $value = @{ state=$state; message=$message; phase=$phase; graphics_report=$report; updated_at=[DateTime]::UtcNow.ToString('o') }
     try {
         New-Item -ItemType Directory -Path $work -Force | Out-Null
         $value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath ($statusPath + '.tmp') -Encoding UTF8
@@ -87,21 +87,29 @@ try {
     $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         try {
-            if ($Resume) { $phase = (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).phase }
+            if ($Resume -or ($Repair -and (Test-Path -LiteralPath $statusPath))) {
+                $phase = (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).phase
+            }
             Write-Status 'installing' 'Waiting for administrator approval inside Windows…' $phase
         } catch {
             Write-Warning 'Could not report the administrator prompt; requesting elevation anyway.'
         }
         $arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
         if ($Resume) { $arguments += ' -Resume' }
+        if ($Repair) { $arguments += ' -Repair' }
         $elevated = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
         exit $elevated.ExitCode
     }
-    if ($Resume) {
+    if ($Resume -or ($Repair -and (Test-Path -LiteralPath $statusPath))) {
         $phase = (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).phase
     }
+    if ($phase -notin @(1, 2, 3)) { throw 'The saved Windows setup phase is invalid.' }
     if (-not $Resume) {
-        Write-Status 'installing' 'Installing Windows integration drivers…' 1
+        if ($Repair) {
+            Write-Status 'installing' 'Updating the setup components for the existing Windows installation…' $phase
+        } else {
+            Write-Status 'installing' 'Installing Windows integration drivers…' 1
+        }
         foreach ($name in @('Install-VirtueGuest.ps1', 'Collect-VirtueGpuReport.ps1', 'windows-account.json', 'asset-checksums.json', 'YttriumDrivers.zip', 'VulkanRT.exe')) {
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $work $name) -Force
         }
@@ -112,6 +120,11 @@ try {
             }
         }
         Register-Resume
+        if ($Repair) {
+            Write-Status 'installing' 'Resuming Windows setup with updated components…' $phase
+            Start-ScheduledTask -TaskName $taskName
+            exit 0
+        }
     }
     if ($phase -eq 1) {
         Write-Status 'installing' 'Installing Windows integration drivers…' 1

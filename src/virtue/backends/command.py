@@ -34,6 +34,7 @@ def build_qemu_command(
     accelerator: str = "kvm",
     guest_agent_socket: str | Path | None = None,
     setup_iso: str | Path | None = None,
+    repair_setup: bool = False,
 ) -> list[str]:
     graphics = "safe" if safe_graphics else config.graphics
     if graphics == "yttrium" and (config.secure_boot or not config.graphics_consent):
@@ -85,7 +86,7 @@ def build_qemu_command(
     else:
         command += ["-device", "ich9-ahci,id=sata", "-device", f"ide-hd,bus=sata.0,drive=osdisk,bootindex={disk_boot}"]
     cd_index = 0
-    if not config.installed and config.iso_path:
+    if not config.installed and config.iso_path and not repair_setup:
         command += ["-drive", f"if=none,id=installer,media=cdrom,readonly=on,file={option(config.iso_path)}",
                     "-device", "ide-cd,bus=ide.0,drive=installer,bootindex=1"]
         cd_index += 1
