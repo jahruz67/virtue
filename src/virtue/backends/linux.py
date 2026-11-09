@@ -18,6 +18,7 @@ import re
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -235,6 +236,27 @@ class LinuxBackend:
                         and (key != "qemu" or str(uuid.UUID(metadata["vm_id"])) in current["cmdline"]))
         except (ValueError, KeyError, TypeError):
             return False
+
+    @staticmethod
+    def _qemu_identity(client: QMPClient, vm_id: str) -> dict:
+        if client.socket is None:
+            raise BackendError("The Windows management connection is not open.")
+        try:
+            # A Flatpak pidfile contains a sandbox PID. Unix peer credentials
+            # identify the QEMU process in the manager's own PID namespace.
+            credentials = client.socket.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+            pid, uid, _ = struct.unpack("3i", credentials)
+        except (OSError, struct.error) as exc:
+            raise BackendError(f"Could not read the Windows process identity from its management socket: {exc}") from exc
+        if uid != os.getuid():
+            raise BackendError("The Windows process belongs to a different user.")
+        identity = _process_identity(pid)
+        vm_uuid = str(uuid.UUID(vm_id))
+        if not identity or vm_uuid not in identity["cmdline"]:
+            raise BackendError("Could not verify the Windows process identity from its management socket.")
+        if client.execute("query-uuid").get("UUID", "").lower() != vm_uuid:
+            raise BackendError("The management socket belongs to a different VM. No command was sent.")
+        return identity
 
     def _qmp(self, vm_id: str, timeout: float = 3) -> QMPClient:
         metadata = self._metadata(vm_id)
@@ -464,14 +486,10 @@ class LinuxBackend:
                         if qemu.poll() is not None or time.monotonic() > deadline:
                             raise BackendError("Windows could not start. Open the VM log; you can retry with Safe graphics.")
                         time.sleep(0.1)
-                    actual_pid = int((runtime / "qemu.pid").read_text().strip())
-                    identity = _process_identity(actual_pid)
-                    if not identity or str(uuid.UUID(config.id)) not in identity["cmdline"]:
-                        raise BackendError("Could not verify the Windows process identity.")
-                    metadata["qemu"] = identity
-                    _atomic_json(directory / "runtime.json", metadata)
-                    client = self._qmp(config.id)
+                    client = QMPClient(runtime / "qmp.sock").connect()
                     try:
+                        metadata["qemu"] = self._qemu_identity(client, config.id)
+                        _atomic_json(directory / "runtime.json", metadata)
                         if not client.execute("query-kvm").get("enabled"):
                             raise BackendError("QEMU did not enable hardware KVM acceleration.")
                     finally:

@@ -110,6 +110,41 @@ class BackendRecoveryTests(unittest.TestCase):
         with patch("virtue.backends.linux._process_identity", return_value={"pid": 42, "start_ticks": "same", "cmdline": ["qemu", "-uuid", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]}):
             self.assertFalse(self.backend._identity_matches(metadata))
 
+    def test_qemu_identity_records_management_socket_host_pid(self):
+        vm_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        identity = {"pid": 4242, "start_ticks": "same", "cmdline": ["qemu", "-uuid", vm_uuid]}
+        client = SimpleNamespace(
+            socket=SimpleNamespace(getsockopt=lambda *_: struct.pack("3i", 4242, 1000, 1000)),
+            execute=lambda _: {"UUID": vm_uuid},
+        )
+        with patch("virtue.backends.linux.socket.SO_PEERCRED", 17, create=True), \
+             patch("virtue.backends.linux.os.getuid", return_value=1000, create=True), \
+             patch("virtue.backends.linux._process_identity", return_value=identity) as probe:
+            self.assertEqual(self.backend._qemu_identity(client, self.config.id), identity)
+        probe.assert_called_once_with(4242)
+
+    def test_qemu_socket_identity_rejects_wrong_owner_process_or_vm(self):
+        vm_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        other_uuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        identity = {"pid": 4242, "start_ticks": "same", "cmdline": ["qemu", "-uuid", vm_uuid]}
+        cases = (
+            (1001, identity, vm_uuid),
+            (1000, None, vm_uuid),
+            (1000, {**identity, "cmdline": ["qemu", "-uuid", other_uuid]}, vm_uuid),
+            (1000, identity, other_uuid),
+        )
+        for uid, process, reported_uuid in cases:
+            client = SimpleNamespace(
+                socket=SimpleNamespace(getsockopt=lambda *_: struct.pack("3i", 4242, uid, 1000)),
+                execute=lambda _: {"UUID": reported_uuid},
+            )
+            with self.subTest(uid=uid, process=process, reported_uuid=reported_uuid), \
+                 patch("virtue.backends.linux.socket.SO_PEERCRED", 17, create=True), \
+                 patch("virtue.backends.linux.os.getuid", return_value=1000, create=True), \
+                 patch("virtue.backends.linux._process_identity", return_value=process), \
+                 self.assertRaises(BackendError):
+                self.backend._qemu_identity(client, self.config.id)
+
     def test_create_rolls_back_only_files_it_created(self):
         vm_id = "b" * 32
         target = self.root / vm_id
