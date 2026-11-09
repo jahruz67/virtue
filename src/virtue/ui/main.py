@@ -360,10 +360,29 @@ class MainWindow(QMainWindow):
         details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         layout.addWidget(details)
         if failed:
+            buttons = QHBoxLayout()
+            buttons.setContentsMargins(0, 0, 0, 0)
             copy_error = QPushButton("Copy error")
-            copy_error.clicked.connect(lambda: QApplication.clipboard().setText(message))
-            layout.addWidget(copy_error, alignment=Qt.AlignmentFlag.AlignLeft)
+            copy_error.setToolTip("Copy the setup error, graphics report and guest diagnostic logs.")
+            copy_error.clicked.connect(lambda: self.show_setup_diagnostics(vm, copy=True))
+            buttons.addWidget(copy_error)
+            view_details = QPushButton("View details")
+            view_details.clicked.connect(lambda: self.show_setup_diagnostics(vm))
+            buttons.addWidget(view_details)
+            buttons.addStretch()
+            layout.addLayout(buttons)
         return indicator
+
+    def show_setup_diagnostics(self, vm, *, copy=False):
+        def show(text):
+            if copy:
+                QApplication.clipboard().setText(text)
+                self.statusBar().showMessage("Error and diagnostics copied.", 5000)
+            else:
+                TextDialog("Windows setup details", text, self).exec()
+        self._perform("Reading Windows diagnostics…",
+                      lambda: self.service.setup_diagnostics(vm["id"]), show,
+                      refresh=False, allow_during_setup=True)
 
     @staticmethod
     def vm_active(vm):

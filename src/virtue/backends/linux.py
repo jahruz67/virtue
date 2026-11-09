@@ -595,6 +595,29 @@ class LinuxBackend:
                 pass
         return guest_status
 
+    def setup_diagnostics(self, vm_id: str) -> dict[str, str]:
+        from .guest_agent import GuestAgent
+        metadata = self._metadata(vm_id)
+        if not metadata or not self._identity_matches(metadata):
+            raise BackendError("Windows is not running or its integration connection is unavailable.")
+        files = {}
+        collected = False
+        with GuestAgent(self._runtime_dir(vm_id) / "qga.sock") as agent:
+            for name, limit in (("gpu-report.json", 128 * 1024),
+                                ("gpu-probe.stdout.txt", 32 * 1024),
+                                ("gpu-probe.stderr.txt", 32 * 1024),
+                                ("pnputil.log", 64 * 1024)):
+                try:
+                    files[name] = agent.read_text("C:\\ProgramData\\Virtue\\" + name, limit,
+                                                 tail=name != "gpu-report.json")
+                    collected = True
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    files[name] = f"Unavailable: {exc}"
+        if not collected:
+            raise BackendError("Guest diagnostic files could not be read. " +
+                               "; ".join(f"{name}: {text}" for name, text in files.items()))
+        return files
+
     def _replace_setup_media(self, client: QMPClient, repair_iso: Path):
         devices = {item.get("device") for item in client.execute("query-block")}
         if "virtue_setup" not in devices:

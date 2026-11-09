@@ -391,6 +391,46 @@ class VMService:
         elif os.name == "nt":
             os.startfile(directory)
 
+    def setup_diagnostics(self, vm_id: str) -> str:
+        from .backends.backend import BackendError
+        config = self.store.load(vm_id)
+        directory = self.store.directory(vm_id)
+        progress = self._setup_progress(directory)
+        sections = [f"Windows diagnostics: {config.name}",
+                    f"Setup state: {progress.get('state', 'unknown')}\n"
+                    f"Setup phase: {progress.get('phase', 'unknown')}\n"
+                    f"Last setup update: {progress.get('updated_at', 'unknown')}\n"
+                    f"{progress.get('message') or 'No setup message has been recorded.'}"]
+        cache = directory / "setup-diagnostics.json"
+        snapshot = {}
+        try:
+            files = self.backend.setup_diagnostics(vm_id)
+            snapshot = {"collected_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                        "files": files}
+        except (BackendError, OSError, ValueError, KeyError, TypeError) as exc:
+            sections.append(f"Live guest diagnostics unavailable: {exc}")
+            try:
+                if cache.is_file() and not cache.is_symlink() and cache.stat().st_size <= 2 * 1024 * 1024:
+                    saved = json.loads(cache.read_text(encoding="utf-8"))
+                    if isinstance(saved, dict) and isinstance(saved.get("files"), dict):
+                        snapshot = saved
+            except (OSError, ValueError):
+                pass
+            if snapshot:
+                sections.append("Using saved guest diagnostics; these may predate the current error.")
+        else:
+            try:
+                atomic_json(cache, snapshot)
+            except OSError as exc:
+                sections.append(f"Could not save a local diagnostics copy: {exc}")
+        if snapshot:
+            sections.append(f"Guest diagnostics captured: {snapshot.get('collected_at', 'unknown')}")
+            for name, text in snapshot["files"].items():
+                sections.append(f"--- {name} ---\n{text or '(empty)'}")
+        else:
+            sections.append("No saved guest diagnostics are available. Leave Windows running and copy again to collect them.")
+        return "\n\n".join(sections)
+
     def read_log(self, vm_id: str) -> str:
         directory = self.store.directory(vm_id)
         output = []

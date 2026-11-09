@@ -51,6 +51,40 @@ class GuestAgent:
             return response.get("return")
         raise ValueError("Windows integration did not respond to this request.")
 
+    def read_text(self, path: str, limit: int, *, tail: bool = False) -> str:
+        handle = self.execute("guest-file-open", {"path": path, "mode": "rb"})
+        try:
+            skipped = 0
+            if tail:
+                end = self.execute("guest-file-seek", {"handle": handle, "offset": 0, "whence": 2})
+                size = end["position"]
+                if type(size) is not int or size < 0:
+                    raise ValueError("Windows returned an invalid diagnostic file size.")
+                skipped = max(0, size - limit)
+                self.execute("guest-file-seek", {"handle": handle, "offset": skipped, "whence": 0})
+            chunks = []
+            remaining = limit
+            eof = False
+            while remaining > 0:
+                count = min(48 * 1024, remaining)
+                result = self.execute("guest-file-read", {"handle": handle, "count": count})
+                data = base64.b64decode(result["buf-b64"], validate=True)
+                if len(data) > count:
+                    raise ValueError("Windows returned more diagnostic data than requested.")
+                chunks.append(data)
+                remaining -= len(data)
+                eof = result.get("eof", False)
+                if eof or not data:
+                    break
+            text = b"".join(chunks).decode("utf-8-sig", errors="replace")
+            if skipped:
+                text = f"[Earlier {skipped} bytes omitted; showing recent log output.]\n" + text
+            if remaining == 0 and not eof:
+                text += f"\n[Truncated after {limit} bytes.]"
+            return text
+        finally:
+            self.execute("guest-file-close", {"handle": handle})
+
     def setup_status(self) -> dict:
         handle = self.execute("guest-file-open", {"path": "C:\\ProgramData\\Virtue\\setup-status.json", "mode": "r"})
         try:
