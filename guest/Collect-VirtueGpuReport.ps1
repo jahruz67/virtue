@@ -6,6 +6,7 @@ if ($env:OS -ne 'Windows_NT') { throw 'Run this collector inside the Windows gue
 
 Add-Type -ReferencedAssemblies System.Windows.Forms,System.Drawing -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -46,7 +47,32 @@ public static class VirtueGlProbe {
     string detail = code == 0 ? "Windows supplied no error code." : new Win32Exception(code).Message;
     return new InvalidOperationException(operation + " failed (Win32 " + code + "): " + detail);
   }
-  public static object Run() {
+  static List<int> PixelFormats() {
+    using (Form form = new ProbeWindow()) {
+      IntPtr handle = form.Handle, dc = GetDC(handle);
+      if(dc==IntPtr.Zero) throw Failure("GetDC");
+      try {
+        PFD pfd = new PFD(); pfd.size=(ushort)Marshal.SizeOf(typeof(PFD)); pfd.version=1;
+        // Prefer the requested format, then try the driver's other hardware RGBA formats.
+        pfd.flags=0x25; pfd.colorBits=32; pfd.depthBits=24;
+        int preferred=ChoosePixelFormat(dc,ref pfd);
+        int count=DescribePixelFormat(dc,1,pfd.size,ref pfd);
+        if(count==0) throw Failure("DescribePixelFormat");
+        List<int> formats = new List<int>();
+        for(int index=0;index<=count;index++) {
+          int pf=index==0 ? preferred : index;
+          if(pf==0 || (index>0 && pf==preferred)) continue;
+          if(DescribePixelFormat(dc,pf,pfd.size,ref pfd)==0) continue;
+          // Require window/OpenGL support; exclude generic software formats.
+          if((pfd.flags & 0x24)!=0x24 || (pfd.flags & 0x40)!=0 ||
+             pfd.pixelType!=0 || pfd.layerType!=0 || pfd.colorBits<24) continue;
+          formats.Add(pf);
+        }
+        return formats;
+      } finally { ReleaseDC(handle,dc); }
+    }
+  }
+  static object RunFormat(int pf) {
     using (Form form = new ProbeWindow()) {
       form.ClientSize = new System.Drawing.Size(64,64);
       form.Text = "Virtue OpenGL probe";
@@ -55,10 +81,6 @@ public static class VirtueGlProbe {
       if(dc==IntPtr.Zero) throw Failure("GetDC");
       try {
         PFD pfd = new PFD(); pfd.size=(ushort)Marshal.SizeOf(typeof(PFD)); pfd.version=1;
-        // PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER.
-        pfd.flags=0x25; pfd.colorBits=32; pfd.depthBits=24;
-        int pf=ChoosePixelFormat(dc,ref pfd);
-        if(pf==0) throw Failure("ChoosePixelFormat");
         if(DescribePixelFormat(dc,pf,pfd.size,ref pfd)==0) throw Failure("DescribePixelFormat");
         if(!SetPixelFormat(dc,pf,ref pfd)) throw Failure("SetPixelFormat");
         string format = " (pixel format " + pf + ", flags 0x" + pfd.flags.ToString("X") + ")";
@@ -75,6 +97,22 @@ public static class VirtueGlProbe {
         return new { vendor=vendor,renderer=renderer,version=version,draw_test_passed=pass,gl_error=error,pixel=pixel,pixel_format=new { index=pf,flags=pfd.flags,color_bits=pfd.colorBits,depth_bits=pfd.depthBits },procedure="64x64 OpenGL triangle draw, finish and pixel readback" };
       } finally { wglMakeCurrent(IntPtr.Zero,IntPtr.Zero); if(rc!=IntPtr.Zero) wglDeleteContext(rc); ReleaseDC(handle,dc); }
     }
+  }
+  public static object Run() {
+    List<int> formats=PixelFormats();
+    if(formats.Count==0) throw new InvalidOperationException("The display driver exposes no hardware RGBA pixel formats for windowed OpenGL.");
+    string firstFailure=null, lastFailure=null;
+    foreach(int pf in formats) {
+      // Windows permits SetPixelFormat only once per window, including failed WGL attempts.
+      try { return RunFormat(pf); }
+      catch(Exception error) {
+        if(firstFailure==null) firstFailure=error.Message;
+        lastFailure=error.Message;
+      }
+    }
+    throw new InvalidOperationException("OpenGL initialization failed for all " + formats.Count +
+      " hardware pixel formats. First failure: " + firstFailure +
+      (lastFailure==firstFailure ? "" : " Last failure: " + lastFailure));
   }
 }
 '@
