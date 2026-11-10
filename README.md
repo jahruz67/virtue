@@ -140,5 +140,5 @@ The model, storage, service and backend boundaries permit a later macOS backend.
 macOS virtualization is deliberately unimplemented while Linux remains unvalidated.
 
 Application source is MIT licensed. Qt/PySide6, QEMU, OVMF, swtpm and Yttrium retain
-their own licenses; see [third-party notices](THIRD_PARTY.md).
+their own licenses; see [third-party notices](THIRD_PARTY.md)
 

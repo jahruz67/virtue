@@ -25,7 +25,7 @@ wheels; the distribution packages supply their own licenses and source material.
   https://github.com/arehnman/yttrium-virtio-gpu
 * Mesa / virglrenderer / Yttrium host bundle: component-specific open-source
   licenses. They are installed separately; their sources and exact researched
-  revisions are linked in `resources/yttrium-stack.json` and `docs/yttrium.md`.
+  revisions are linked in `resources/yttrium-stack.json` and `docs/yttrium.md'
 
 Windows, SOLIDWORKS, benchmarks and drivers must be obtained under their own terms.
 No Microsoft installer, product key, proprietary CAD package or activation bypass
