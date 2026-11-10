@@ -248,7 +248,8 @@ class VMService:
     def update_vm(self, vm_id: str, options: dict) -> dict:
         allowed = {"name", "memory_mib", "cpus", "disk_gib", "installed", "iso_path",
                    "drivers_iso_path", "storage_bus", "virtio_network", "hyperv", "resource_mode",
-                   "start_fullscreen", "match_host_display", "display_monitor", "relative_mouse", "grab_on_hover"}
+                   "start_fullscreen", "match_host_display", "display_monitor", "relative_mouse", "grab_on_hover",
+                   "solidworks_compatibility"}
         if set(options) - allowed:
             raise ValidationError("These settings require the dedicated graphics or storage workflow.")
         with self.store.transaction():

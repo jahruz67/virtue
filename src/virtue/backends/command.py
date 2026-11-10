@@ -57,11 +57,17 @@ def build_qemu_command(
     machine = machine_type + ",smm=on,vmport=off,dump-guest-core=off"
     if graphics == "yttrium":
         machine += ",memory-backend=ram"
+    solidworks = getattr(config, "solidworks_compatibility", False)
     cpu = "host"
     for flag in hyperv:
         if flag not in {"hv-relaxed", "hv-vapic", "hv-time", "hv-vpindex", "hv-synic", "hv-stimer", "hv-tlbflush", "hv-ipi"}:
             raise BackendError("Unsupported CPU optimization option.")
-        cpu += f",{flag}=on"
+        if not solidworks:
+            cpu += f",{flag}=on"
+    if solidworks:
+        # Hyper-V leaves and nested virtualization can expose a hypervisor even
+        # when the standard CPUID hypervisor bit is cleared. Keep KVM acceleration.
+        cpu += ",kvm=off,hypervisor=off,vmx=off,svm=off"
     command += [
         "-name", f"guest={option(config.name)}", "-uuid", str(uuid.UUID(config.id)),
         "-no-user-config", "-nodefaults", "-machine", machine, "-accel", accelerator,
@@ -78,6 +84,15 @@ def build_qemu_command(
         "-device", "usb-mouse,bus=xhci.0" if getattr(config, "relative_mouse", False) else "usb-tablet,bus=xhci.0",
         "-device", "usb-kbd,bus=xhci.0",
     ]
+    if solidworks:
+        # Replace QEMU's default SMBIOS branding without borrowing a real
+        # machine's identity. Keep the existing VM UUID stable across boots.
+        command += [
+            "-smbios", "type=0,vendor=Virtue,version=1.0,uefi=on",
+            "-smbios", f"type=1,manufacturer=Virtue,product=Workstation,version=1.0,serial={config.id},uuid={uuid.UUID(config.id)},family=Workstation",
+            "-smbios", f"type=2,manufacturer=Virtue,product=Mainboard,version=1.0,serial={config.id}",
+            "-smbios", f"type=3,manufacturer=Virtue,version=1.0,serial={config.id}",
+        ]
     # JSON blockdev keeps filenames opaque, including commas and colons.
     command += ["-blockdev", json.dumps({
         "driver": "qcow2", "node-name": "osdisk", "discard": "unmap",
@@ -90,7 +105,8 @@ def build_qemu_command(
     if getattr(config, "storage_bus", "sata") == "virtio":
         command += ["-device", f"virtio-blk-pci,drive=osdisk,bootindex={disk_boot}"]
     else:
-        command += ["-device", "ich9-ahci,id=sata", "-device", f"ide-hd,bus=sata.0,drive=osdisk,bootindex={disk_boot}"]
+        disk_model = ",model=Virtue SSD" if solidworks else ""
+        command += ["-device", "ich9-ahci,id=sata", "-device", f"ide-hd,bus=sata.0,drive=osdisk,bootindex={disk_boot}{disk_model}"]
     cd_index = 0
     if not config.installed and config.iso_path and not repair_setup:
         command += ["-drive", f"if=none,id=installer,media=cdrom,readonly=on,file={option(config.iso_path)}",

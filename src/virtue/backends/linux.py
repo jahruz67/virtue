@@ -460,7 +460,7 @@ class LinuxBackend:
         return None
 
     def _hyperv(self, prefix: list[str], config: Any) -> list[str]:
-        if not getattr(config, "hyperv", True):
+        if not getattr(config, "hyperv", True) or getattr(config, "solidworks_compatibility", False):
             return []
         # QEMU validates this conservative set on KVM before the real VM starts.
         # Probe through QMP with no VM disk/TPM attached, preventing a failed

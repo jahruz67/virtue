@@ -576,6 +576,12 @@ class MainWindow(QMainWindow):
             return item
 
         action("Settings…", lambda: self.edit_vm(vm), offline_changes)
+        solidworks = action("Fix SolidWorks", lambda checked: self.fix_solidworks(vm, checked),
+                            offline_changes and bool(vm.get("installed")))
+        solidworks.setCheckable(True)
+        solidworks.setChecked(bool(vm.get("solidworks_compatibility")))
+        solidworks.setToolTip("Shut down Windows after setup to enable or undo SolidWorks compatibility. "
+                              "Reduces VM detection signals; license acceptance is not guaranteed.")
         action("Start fullscreen", lambda: self.start_vm(vm, fullscreen=True), self._can_launch(vm) and stopped)
         action("Shut down", lambda: self.shutdown_vm(vm), active)
         action("Restart…", lambda: self.restart_vm(vm), vm.get("state") == "running")
@@ -627,6 +633,23 @@ class MainWindow(QMainWindow):
             options["fullscreen"] = True
         self._perform("Starting Windows in its desktop window…",
                       lambda: self.service.start_vm(vm["id"], safe_graphics=safe, **options))
+
+    def fix_solidworks(self, vm, enabled):
+        def applied(updated):
+            if updated["solidworks_compatibility"]:
+                message = (
+                    "SolidWorks compatibility is enabled. Start Windows, then retry the SolidWorks installer "
+                    "with your license.\n\n"
+                    "This reduces common VM detection signals, but license acceptance is not guaranteed. "
+                    "Performance may be lower, and Windows or other apps may request reactivation.\n\n"
+                    "To undo, shut down Windows and uncheck Fix SolidWorks."
+                )
+            else:
+                message = "SolidWorks compatibility is disabled. Normal VM settings will be used the next time Windows starts."
+            QMessageBox.information(self, "Fix SolidWorks", message)
+
+        self._perform("Saving SolidWorks compatibility settings…",
+                      lambda: self.service.update_vm(vm["id"], {"solidworks_compatibility": enabled}), applied)
 
     def shutdown_vm(self, vm):
         self._perform("Requesting a safe Windows shutdown…", lambda: self.service.shutdown_vm(vm["id"]), allow_during_setup=True)

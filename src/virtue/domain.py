@@ -61,6 +61,7 @@ class VMConfig:
     display_monitor: str = ""
     relative_mouse: bool = False
     grab_on_hover: bool = False
+    solidworks_compatibility: bool = False
 
     def __post_init__(self) -> None:
         if not self.created_at:
@@ -128,7 +129,8 @@ class VMConfig:
         if host_cpus and self.cpus > max(2, host_cpus - 1):
             raise ValidationError("Leave at least one logical CPU for the host; reduce the virtual CPU count.")
         for key in ("installed", "secure_boot", "graphics_consent", "auto_setup", "virtio_network", "hyperv",
-                    "start_fullscreen", "match_host_display", "relative_mouse", "grab_on_hover"):
+                    "start_fullscreen", "match_host_display", "relative_mouse", "grab_on_hover",
+                    "solidworks_compatibility"):
             if type(getattr(self, key)) is not bool:
                 raise ValidationError(f"{key} must be true or false.")
         if (not isinstance(self.display_monitor, str) or len(self.display_monitor) > 256
