@@ -52,6 +52,7 @@ jobs:
       - name: Install native runtime build tools
         if: steps.runtime-cache.outputs.cache-hit != 'true'
         run: |
+          python -m pip install PyYAML
           formulas=(cmake ninja meson pkgconf glib pixman libslirp zstd libusb swtpm sevenzip wimlib xorriso)
           brew install "${formulas[@]}"
           # Align installed dependencies with the source versions archived for this build.

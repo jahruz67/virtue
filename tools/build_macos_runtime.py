@@ -148,8 +148,7 @@ def download_asset(spec: dict, destination: Path) -> None:
     temporary.rename(destination)
 
 
-def validate_guest_media(recipe: dict, output: Path) -> None:
-    extractor = output / recipe["paths"]["extractor"]
+def validate_guest_media(recipe: dict, output: Path, extractor: Path) -> None:
     iso = output / recipe["paths"]["virtio_iso"]
     listing = run([extractor, "l", "-slt", iso], capture=True).replace("\\", "/").lower()
     if "guest-agent/qemu-ga-x86_64.msi" not in listing:
@@ -188,8 +187,6 @@ def stage_runtime(recipe: dict, prefix: Path, angle_lib: Path, output: Path) -> 
     files.extend((path, output / "lib" / path.name) for path in angle_libraries)
     for source, destination in files:
         copy_file(source, destination)
-    for role, spec in recipe["assets"].items():
-        download_asset(spec, output / recipe["paths"][role])
     return files
 
 
@@ -198,7 +195,7 @@ def rpaths(binary: Path) -> list[str]:
     return re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset \d+\)", commands)
 
 
-def resolve_library(name: str, source: Path, executable: Path, paths: list[str], search: list[Path]) -> Path:
+def resolve_library(name: str, source: Path, executable: Path, paths: tuple[str, ...], search: list[Path]) -> Path:
     def expand(value):
         return Path(value.replace("@loader_path", str(source.parent))
                     .replace("@executable_path", str(executable)))
@@ -215,12 +212,15 @@ def resolve_library(name: str, source: Path, executable: Path, paths: list[str],
 
 
 def bundle_libraries(files: list, output: Path, search: list[Path]) -> set[Path]:
-    pending = [(source.resolve(), destination, source.resolve().parent) for source, destination in files]
+    # Process executables first so dependencies inherit their loading context.
+    ordered = sorted(files, key=lambda item: item[1].parent != output / "lib")
+    pending = [(source.resolve(), destination, source.resolve().parent, ())
+               for source, destination in ordered]
     locations = {source.resolve(): destination for source, destination in files}
     copied = {destination: source.resolve() for source, destination in files}
     visited, originals = set(), set()
     while pending:
-        source, destination, executable = pending.pop()
+        source, destination, executable, inherited_paths = pending.pop()
         if destination in visited:
             continue
         visited.add(destination)
@@ -230,21 +230,27 @@ def bundle_libraries(files: list, output: Path, search: list[Path]) -> set[Path]
         thin_arm64(destination)
         originals.add(source)
         paths = rpaths(source)
+        search_paths = tuple(value.replace("@loader_path", str(source.parent))
+                             .replace("@executable_path", str(executable)) for value in paths)
+        search_paths += inherited_paths
         identity = run(["/usr/bin/otool", "-arch", "arm64", "-D", source], capture=True, timeout=30).splitlines()[1:]
         dependencies = run(["/usr/bin/otool", "-arch", "arm64", "-L", source], capture=True, timeout=30).splitlines()[1:]
         for line in dependencies:
             dependency = line.strip().split(" (", 1)[0]
             if dependency in identity or dependency.startswith(SYSTEM_LIBRARIES):
                 continue
-            library = resolve_library(dependency, source, executable, paths, search)
+            library = resolve_library(dependency, source, executable, search_paths, search)
             target = locations.setdefault(library, output / "lib" / library.name)
             if target in copied and copied[target] != library:
                 raise RuntimeError(f"Conflicting native libraries: {target.name}")
             if target not in copied:
                 copy_file(library, target)
                 copied[target] = library
-                pending.append((library, target, executable))
-            run(["/usr/bin/install_name_tool", "-change", dependency, target, destination], timeout=30)
+            if target not in visited:
+                pending.append((library, target, executable, search_paths))
+            relative = os.path.relpath(target, destination.parent)
+            run(["/usr/bin/install_name_tool", "-change", dependency,
+                 "@loader_path/" + relative, destination], timeout=30)
         if identity:
             run(["/usr/bin/install_name_tool", "-id", "@rpath/" + destination.name, destination], timeout=30)
         for value in set(paths):
@@ -326,6 +332,10 @@ def main() -> int:
         recipe = json.loads(RECIPE.read_text(encoding="utf-8"))
         output.mkdir(parents=True, exist_ok=False)
         (work / "sources").mkdir(parents=True, exist_ok=False)
+        for role, spec in recipe["assets"].items():
+            download_asset(spec, output / recipe["paths"][role])
+        extractor = Path(run(["brew", "--prefix", "sevenzip"], capture=True)) / "bin/7zz"
+        validate_guest_media(recipe, output, extractor)
         records = checkout_sources(recipe, work / "sources")
         for role, spec in recipe["assets"].items():
             if "repository" in spec:
@@ -333,7 +343,6 @@ def main() -> int:
         brew = Path(run(["brew", "--prefix"], capture=True))
         prefix, angle_lib = build_components(recipe, work, brew)
         files = stage_runtime(recipe, prefix, angle_lib, output)
-        validate_guest_media(recipe, output)
         originals = bundle_libraries(files, output, [prefix / "lib", angle_lib, brew / "lib"])
         records.update(archive_homebrew_sources(originals, work / "sources", output))
         write_manifest(recipe, records, work / "sources", output)
