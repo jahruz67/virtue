@@ -22,7 +22,7 @@ import tarfile
 import urllib.request
 import zipfile
 
-from build_macos import MACHO
+from build_macos import MACHO, thin_arm64
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,12 +72,12 @@ def meson_install(source: Path, build: Path, prefix: Path, env: dict, *options) 
 
 def build_angle(source: Path, build: Path, minimum: str) -> Path:
     angle = source / "Source/ThirdParty/ANGLE"
-    # Replace the pinned WebKit config's removed libc++ assertions flag.
+    # Keep the older WebKit snapshot compatible with the runner's newer SDK/compiler.
     run(["xcodebuild", "archive", "-archivePath", build, "-scheme", "ANGLE",
          "-sdk", "macosx", "-arch", "arm64", "-configuration", "Release",
          "WK_LIBCPP_ASSERTIONS_CFLAGS=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
-         # Newer Clang warns about legacy virtual declarations in this pinned source.
-         "WARNING_CFLAGS=$(inherited) -Wno-error=unnecessary-virtual-specifier",
+         "GCC_TREAT_WARNINGS_AS_ERRORS=NO",
+         "LD_DYLIB_INSTALL_NAME=@rpath/$(EXECUTABLE_NAME)",
          "WEBCORE_LIBRARY_DIR=/usr/local/lib", "NORMAL_UMBRELLA_FRAMEWORKS_DIR=",
          "OTHER_LDFLAGS=$(inherited) -Wl,-headerpad_max_install_names",
          "CODE_SIGNING_ALLOWED=NO", f"MACOSX_DEPLOYMENT_TARGET={minimum}"], cwd=angle)
@@ -164,8 +164,15 @@ def validate_guest_media(recipe: dict, output: Path) -> None:
 
 
 def stage_runtime(recipe: dict, prefix: Path, angle_lib: Path, output: Path) -> list:
+    # QEMU also loads option ROMs and other data beyond the two UEFI images.
+    shutil.copytree(prefix / "share/qemu", output / "share/qemu", symlinks=False)
+    required_data = [recipe["paths"][role] for role in ("firmware_code", "firmware_vars")]
+    required_data.append("share/qemu/efi-virtio.rom")
+    for relative in required_data:
+        if not (output / relative).is_file():
+            raise RuntimeError(f"QEMU did not install required runtime data: {relative}")
     files = [(prefix / recipe["paths"][role], output / recipe["paths"][role])
-             for role in ("qemu", "qemu_img", "firmware_code", "firmware_vars", "render_server", "dxmt_library")]
+             for role in ("qemu", "qemu_img", "render_server", "dxmt_library")]
     for role, formula in (("swtpm", "swtpm"), ("extractor", "sevenzip"),
                           ("wimlib", "wimlib"), ("xorriso", "xorriso")):
         root = Path(run(["brew", "--prefix", formula], capture=True))
@@ -187,7 +194,7 @@ def stage_runtime(recipe: dict, prefix: Path, angle_lib: Path, output: Path) -> 
 
 
 def rpaths(binary: Path) -> list[str]:
-    commands = run(["/usr/bin/otool", "-l", binary], capture=True, timeout=30)
+    commands = run(["/usr/bin/otool", "-arch", "arm64", "-l", binary], capture=True, timeout=30)
     return re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset \d+\)", commands)
 
 
@@ -220,10 +227,11 @@ def bundle_libraries(files: list, output: Path, search: list[Path]) -> set[Path]
         with source.open("rb") as stream:
             if stream.read(4) not in MACHO:
                 continue
+        thin_arm64(destination)
         originals.add(source)
         paths = rpaths(source)
-        identity = run(["/usr/bin/otool", "-D", source], capture=True, timeout=30).splitlines()[1:]
-        dependencies = run(["/usr/bin/otool", "-L", source], capture=True, timeout=30).splitlines()[1:]
+        identity = run(["/usr/bin/otool", "-arch", "arm64", "-D", source], capture=True, timeout=30).splitlines()[1:]
+        dependencies = run(["/usr/bin/otool", "-arch", "arm64", "-L", source], capture=True, timeout=30).splitlines()[1:]
         for line in dependencies:
             dependency = line.strip().split(" (", 1)[0]
             if dependency in identity or dependency.startswith(SYSTEM_LIBRARIES):

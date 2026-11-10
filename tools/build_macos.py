@@ -46,10 +46,24 @@ def native_files(root: Path) -> list[Path]:
     return result
 
 
+def thin_arm64(binary: Path) -> None:
+    architectures = run(["/usr/bin/lipo", "-archs", str(binary)], timeout=30).split()
+    if "arm64" not in architectures:
+        raise RuntimeError(f"The native helper has no arm64 slice: {binary.name}")
+    if len(architectures) == 1:
+        return
+    # install_name_tool cannot change an rpath missing from another architecture.
+    with tempfile.TemporaryDirectory(prefix=".virtue-arch-", dir=binary.parent) as temporary:
+        destination = Path(temporary) / binary.name
+        run(["/usr/bin/lipo", str(binary), "-thin", "arm64", "-output", str(destination)], timeout=30)
+        destination.chmod(binary.stat().st_mode)
+        destination.replace(binary)
+
+
 def rebase_runtime(runtime: Path, original: Path) -> list[Path]:
     binaries = native_files(runtime)
     for binary in binaries:
-        run(["/usr/bin/lipo", "-verify_arch", "arm64", str(binary)], timeout=30)
+        thin_arm64(binary)
         dependencies = run(["/usr/bin/otool", "-L", str(binary)], timeout=30).splitlines()[1:]
         for line in dependencies:
             dependency = line.strip().split(" (", 1)[0]
@@ -83,11 +97,17 @@ def rebase_runtime(runtime: Path, original: Path) -> list[Path]:
     return binaries
 
 
+def codesign_arguments(identity: str) -> list[str]:
+    arguments = ["/usr/bin/codesign", "--force", "--sign", identity]
+    # Hardened library validation requires an Apple-issued identity with a Team ID.
+    if identity != "-":
+        arguments += ["--options", "runtime", "--timestamp"]
+    return arguments
+
+
 def sign_runtime(runtime: Path, binaries: list[Path], identity: str, qemu: Path) -> None:
     for binary in sorted(binaries, key=lambda path: len(path.parts), reverse=True):
-        arguments = ["/usr/bin/codesign", "--force", "--options", "runtime", "--sign", identity]
-        if identity != "-":
-            arguments.append("--timestamp")
+        arguments = codesign_arguments(identity)
         if binary == qemu:
             arguments += ["--entitlements", str(ROOT / "packaging/macos/qemu-entitlements.plist")]
         run([*arguments, str(binary)], timeout=120)
@@ -118,8 +138,10 @@ def build(args) -> Path:
         command = [sys.executable, "-m", "PyInstaller", "--windowed", "--onedir", "--name", "Virtue",
                    "--target-arch", "arm64", "--osx-bundle-identifier", "org.virtue.desktop",
                    "--paths", str(ROOT / "src"), "--distpath", str(stage / "dist"),
-                   "--workpath", str(stage / "build"), "--specpath", str(stage),
-                   "--codesign-identity", args.sign_identity]
+                   "--workpath", str(stage / "build"), "--specpath", str(stage)]
+        # Passing '-' explicitly enables PyInstaller's hardened-runtime branch.
+        if args.sign_identity != "-":
+            command += ["--codesign-identity", args.sign_identity]
         for name in ("resources", "guest", "docs"):
             folder = stage / name
             shutil.copytree(ROOT / name, folder, ignore=shutil.ignore_patterns("macos-runtime"))
@@ -147,9 +169,7 @@ def build(args) -> Path:
                     NSMicrophoneUsageDescription="Use the microphone in your Windows environment when supported by the audio backend.")
         with info_path.open("wb") as stream:
             plistlib.dump(info, stream)
-        signing = ["/usr/bin/codesign", "--force", "--options", "runtime", "--sign", args.sign_identity]
-        if args.sign_identity != "-":
-            signing.append("--timestamp")
+        signing = codesign_arguments(args.sign_identity)
         run([*signing, str(app)], timeout=120)
         run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)], timeout=120)
         if args.notary_profile:
