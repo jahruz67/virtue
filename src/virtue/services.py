@@ -104,6 +104,8 @@ class VMService:
         if "graphics" in status:
             status["active_graphics"] = status.pop("graphics")
         result.update(status)
+        if config.installed and hasattr(self.backend, "display_status"):
+            result["display_status"] = self.backend.display_status(config.id)
         if config.auto_setup and not config.installed:
             result["setup"] = self._setup_progress(self.store.directory(config.id))
         disk = self.store.directory(config.id) / "disk.qcow2"
@@ -245,7 +247,8 @@ class VMService:
 
     def update_vm(self, vm_id: str, options: dict) -> dict:
         allowed = {"name", "memory_mib", "cpus", "disk_gib", "installed", "iso_path",
-                   "drivers_iso_path", "storage_bus", "virtio_network", "hyperv", "resource_mode"}
+                   "drivers_iso_path", "storage_bus", "virtio_network", "hyperv", "resource_mode",
+                   "start_fullscreen", "match_host_display", "display_monitor", "relative_mouse", "grab_on_hover"}
         if set(options) - allowed:
             raise ValidationError("These settings require the dedicated graphics or storage workflow.")
         with self.store.transaction():
@@ -261,14 +264,20 @@ class VMService:
             self.store.save(config)
             return self._view(config)
 
-    def start_vm(self, vm_id: str, safe_graphics: bool = False):
+    def start_vm(self, vm_id: str, safe_graphics: bool = False, *, display_mode: dict | None = None,
+                 fullscreen: bool = False):
         with self.store.transaction():
             config = self.store.load(vm_id)
             self._require_stopped(config)
             config = self._configure_resources(config, starting=True)
             self._check_standalone_disk(self.store.directory(vm_id) / "disk.qcow2")
             self.store.save(config)
-            return self.backend.start(config, safe_graphics=safe_graphics)
+            options = {}
+            if display_mode is not None:
+                options["display_mode"] = display_mode
+            if fullscreen:
+                options["fullscreen"] = True
+            return self.backend.start(config, safe_graphics=safe_graphics, **options)
 
     def _lifecycle(self, vm_id: str, operation: str):
         with self.store.transaction():

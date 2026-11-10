@@ -20,7 +20,7 @@ def main(argv: list[str] | None = None) -> int:
         from .host import detect_host
         print(json.dumps(detect_host().to_dict(), indent=2))
         return 0
-    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtCore import QCoreApplication, QSettings
     from PySide6.QtWidgets import QApplication
     from .services import VMService
     from .store import VMStore
@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     application.setWindowIcon(app_icon())
     try:
         service = VMService(VMStore(args.data_dir))
-        window = create_window(service)
+        window = create_window(service, settings=QSettings())
         window.show()
         return application.exec()
     except Exception as exc:

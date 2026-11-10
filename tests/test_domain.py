@@ -20,6 +20,8 @@ def test_resources_reserve_host_and_other_vms(tmp_path):
     {"windows_version": "linux"}, {"graphics": "invalid"}, {"graphics_consent": False}, {"name": "\n"},
     {"machine_type": "q35,accel=tcg"}, {"installed": 1}, {"iso_path": "a\x00.iso"},
     {"resource_mode": "elastic"}, {"resource_mode": True},
+    {"start_fullscreen": 1}, {"match_host_display": "yes"}, {"relative_mouse": None},
+    {"grab_on_hover": 1}, {"display_monitor": "screen\n-device"}, {"display_monitor": 4},
 ])
 def test_invalid_settings_rejected(change):
     vm = VMConfig.new({"name": "Windows"})

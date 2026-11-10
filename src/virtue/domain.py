@@ -56,6 +56,11 @@ class VMConfig:
     hyperv: bool = True
     schema_version: int = 1
     resource_mode: str = "manual"
+    start_fullscreen: bool = False
+    match_host_display: bool = True
+    display_monitor: str = ""
+    relative_mouse: bool = False
+    grab_on_hover: bool = False
 
     def __post_init__(self) -> None:
         if not self.created_at:
@@ -122,9 +127,13 @@ class VMConfig:
                                       "and account for other running VMs. Choose a smaller allocation.")
         if host_cpus and self.cpus > max(2, host_cpus - 1):
             raise ValidationError("Leave at least one logical CPU for the host; reduce the virtual CPU count.")
-        for key in ("installed", "secure_boot", "graphics_consent", "auto_setup", "virtio_network", "hyperv"):
+        for key in ("installed", "secure_boot", "graphics_consent", "auto_setup", "virtio_network", "hyperv",
+                    "start_fullscreen", "match_host_display", "relative_mouse", "grab_on_hover"):
             if type(getattr(self, key)) is not bool:
                 raise ValidationError(f"{key} must be true or false.")
+        if (not isinstance(self.display_monitor, str) or len(self.display_monitor) > 256
+                or any(ord(c) < 32 for c in self.display_monitor)):
+            raise ValidationError("Invalid display monitor name.")
         if self.graphics not in ("safe", "yttrium"):
             raise ValidationError("Unknown graphics backend.")
         if self.graphics == "yttrium" and not self.graphics_consent:

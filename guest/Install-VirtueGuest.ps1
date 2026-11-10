@@ -317,6 +317,8 @@ function Register-Resume {
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
     $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Highest
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+    $displayScript = Join-Path $work 'Set-VirtueDisplay.ps1'
+    & $displayScript -Register
 }
 
 function Enable-AutomaticLogon {
@@ -467,7 +469,7 @@ try {
         } else {
             Write-Status 'installing' 'Installing Windows integration drivers…' 1
         }
-        foreach ($name in @('Install-VirtueGuest.ps1', 'Collect-VirtueGpuReport.ps1', 'windows-account.json', 'asset-checksums.json', 'YttriumDrivers.zip', 'VulkanRT.exe')) {
+        foreach ($name in @('Install-VirtueGuest.ps1', 'Collect-VirtueGpuReport.ps1', 'Set-VirtueDisplay.ps1', 'windows-account.json', 'asset-checksums.json', 'YttriumDrivers.zip', 'VulkanRT.exe')) {
             $source = Join-Path $PSScriptRoot $name
             $destination = Join-Path $work $name
             if ([System.IO.Path]::GetFullPath($source) -ne [System.IO.Path]::GetFullPath($destination)) {

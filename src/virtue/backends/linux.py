@@ -23,13 +23,14 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any
 import uuid
 
 from .backend import BackendError
 from .command import build_qemu_command, option
-from .display import display_environment
+from .display import apply_guest_display, validate_display_mode
 from .qmp import QMPClient, QMPError
 
 
@@ -88,6 +89,8 @@ class LinuxBackend:
         self.root.mkdir(parents=True, exist_ok=True)
         self.host = host
         self._children: dict[int, subprocess.Popen] = {}
+        self._display_workers: dict[str, threading.Thread] = {}
+        self._display_lock = threading.Lock()
 
     def _supported(self):
         if sys.platform != "linux":
@@ -318,6 +321,7 @@ class LinuxBackend:
             state = "running" if result.get("running") else "paused" if status in ("paused", "prelaunch") else "error"
             return {"state": state, "qemu_status": status, "kvm": bool(kvm.get("enabled")),
                     "graphics": metadata.get("graphics"), "started_at": metadata.get("started_at"),
+                    "host_display": metadata.get("host_display"), "hyperv_flags": metadata.get("hyperv_flags", []),
                     "pid": metadata["qemu"]["pid"], "log": str(self._directory(vm_id) / "qemu.log")}
         except BackendError as exc:
             return {"state": "error", "error": str(exc), "process_active": True,
@@ -326,6 +330,31 @@ class LinuxBackend:
     def is_active(self, vm_id: str) -> bool:
         metadata = self._metadata(vm_id)
         return bool(metadata and self._identity_matches(metadata))
+
+    def display_status(self, vm_id: str) -> dict:
+        metadata = self._metadata(vm_id)
+        if not metadata or not self._identity_matches(metadata) or not metadata.get("host_display"):
+            return {}
+        mode = validate_display_mode(metadata["host_display"])
+        runtime = self._runtime_dir(vm_id)
+        path = runtime / "display-status.json"
+        request_id = metadata["started_at"]
+        with self._display_lock:
+            result = _read_json(path) if path.exists() else {}
+            if result.get("request_id") == request_id and result.get("state") in {"applied", "unsupported", "error"}:
+                return result
+            worker = self._display_workers.get(vm_id)
+            if worker is None or not worker.is_alive():
+                result = {"state": "applying", "request_id": request_id, "requested": mode,
+                          "message": "Matching the Windows display after sign-in…"}
+                _atomic_json(path, result)
+                worker = threading.Thread(target=apply_guest_display,
+                                          args=(runtime, mode, request_id,
+                                                lambda: self._identity_matches(metadata),
+                                                lambda value: _atomic_json(path, value)), daemon=True)
+                self._display_workers[vm_id] = worker
+                worker.start()
+            return result
 
     def _require_stopped(self, vm_id: str):
         if (self._directory(vm_id) / "restore_pending.json").exists():
@@ -436,18 +465,23 @@ class LinuxBackend:
         # QEMU validates this conservative set on KVM before the real VM starts.
         # Probe through QMP with no VM disk/TPM attached, preventing a failed
         # optimization probe from modifying the guest.
-        flags = ["hv-relaxed", "hv-vapic", "hv-time"]
+        base = ["hv-relaxed", "hv-vapic", "hv-time"]
         request = json.dumps({"execute": "qmp_capabilities"}) + "\n"
         request += json.dumps({"execute": "quit"}) + "\n"
-        command = prefix + ["-machine", "q35,accel=kvm", "-cpu", "host," + ",".join(f"{f}=on" for f in flags),
-                            "-m", "128", "-S", "-nodefaults", "-display", "none", "-qmp", "stdio"]
-        try:
-            probe = subprocess.run(command, input=request, capture_output=True, text=True, timeout=10)
-            return flags if probe.returncode == 0 and '"QMP"' in probe.stdout else []
-        except (OSError, subprocess.TimeoutExpired):
-            return []
+        for flags in (base + ["hv-vpindex", "hv-synic", "hv-stimer"], base):
+            command = prefix + ["-machine", "q35,accel=kvm", "-cpu", "host," + ",".join(f"{f}=on" for f in flags),
+                                "-m", "128", "-S", "-nodefaults", "-display", "none", "-qmp", "stdio"]
+            try:
+                probe = subprocess.run(command, input=request, capture_output=True, text=True, timeout=10)
+                if probe.returncode == 0 and '"QMP"' in probe.stdout:
+                    return flags
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+        return []
 
-    def start(self, config: Any, safe_graphics: bool = False) -> dict:
+    def start(self, config: Any, safe_graphics: bool = False, *, display_mode: dict | None = None,
+              fullscreen: bool = False) -> dict:
+        display_mode = validate_display_mode(display_mode) if getattr(config, "match_host_display", True) else None
         self._supported()
         host = self._host()
         if not getattr(host, "ready", False):
@@ -476,11 +510,6 @@ class LinuxBackend:
             if setup_iso and not setup_iso.is_file():
                 raise BackendError("Automatic Windows installation media is missing. Retry setup in the app.")
             prefix = self._prefix(graphics, directory, runtime, config)
-            sandboxed = Path(prefix[0]).name == "flatpak" and "run" in prefix
-            display_env = display_environment(runtime, sandboxed=sandboxed)
-            if sandboxed:
-                index = prefix.index("run") + 1
-                prefix[index:index] = [f"--env={key}={value}" for key, value in display_env.items()]
             code = self._firmware_code(directory)
             hyperv = self._hyperv(prefix, config)
             audio_backend = self._audio_backend(prefix)
@@ -488,12 +517,14 @@ class LinuxBackend:
                 raise BackendError("The required sound components are unavailable. Use Retry / repair setup.")
             command = build_qemu_command(config, directory, prefix, code, runtime / "qmp.sock", runtime / "tpm.sock",
                                          safe_graphics=safe_graphics, audio_backend=audio_backend,
-                                         hyperv=hyperv,
+                                         hyperv=hyperv, fullscreen=fullscreen, display_mode=display_mode,
                                          accelerator=getattr(host, "yttrium_accel", "kvm") if graphics == "yttrium" else "kvm",
                                          guest_agent_socket=runtime / "qga.sock", setup_iso=setup_iso, repair_setup=repairing)
             command += ["-pidfile", str(runtime / "qemu.pid")]
             metadata = {"vm_id": config.id, "qmp": str(runtime / "qmp.sock"), "graphics": graphics,
-                        "machine_type": config.machine_type, "hyperv_flags": hyperv,
+                        "machine_type": config.machine_type, "hyperv_flags": hyperv, "host_display": display_mode,
+                        "start_fullscreen": fullscreen or getattr(config, "start_fullscreen", False),
+                        "relative_mouse": getattr(config, "relative_mouse", False),
                         "started_at": datetime.now(timezone.utc).isoformat()}
             tpm: subprocess.Popen | None = None
             qemu: subprocess.Popen | None = None
@@ -514,7 +545,7 @@ class LinuxBackend:
                         time.sleep(0.05)
                     metadata["swtpm"] = _process_identity(tpm.pid)
                     qemu = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                            start_new_session=True, close_fds=True, env={**os.environ, **display_env})
+                                            start_new_session=True, close_fds=True)
                     self._children[qemu.pid] = qemu
                     deadline = time.monotonic() + 20
                     while not ((runtime / "qemu.pid").exists() and (runtime / "qmp.sock").exists()):

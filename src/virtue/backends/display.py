@@ -1,61 +1,69 @@
-"""Process-local GTK styling for the native accelerated guest window."""
+"""Validated host display hints; GTK retains native rendering and input ownership."""
 
 from __future__ import annotations
 
-import os
+import json
+import math
 from pathlib import Path
-import tempfile
+import time
+
+from .backend import BackendError
 
 
-_THEME = "VirtueVM"
-_SANDBOX_DATA = "/app/share:/usr/share:/usr/share/runtime/share:/run/host/user-share:/run/host/share"
-_CSS = """
-@import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained.css");
-@define-color theme_selected_bg_color #245edb;
-@define-color theme_selected_fg_color #ffffff;
-window.background { background-color: #f5f6f8; color: #202631; }
-headerbar, .titlebar {
-  background-image: none; background-color: #f8f9fb; color: #202631;
-  border-bottom: 1px solid #dce1e8; box-shadow: none;
-}
-menubar { background-color: #ffffff; color: #202631; padding: 2px 6px; }
-menubar > menuitem { padding: 6px 12px; border-radius: 5px; }
-menu { background-color: #ffffff; color: #202631; border: 1px solid #c6ced9; padding: 6px; }
-menu menuitem { padding: 7px 12px; border-radius: 4px; }
-menuitem:hover { background-color: #e8efff; color: #1949b2; }
-button { background-image: none; background-color: #ffffff; color: #202631; border-color: #b8c2cf; border-radius: 6px; }
-button:hover { background-color: #f0f3f8; border-color: #8d9bad; }
-button:focus { outline: 2px solid #245edb; outline-offset: -2px; }
-button:disabled, menuitem:disabled { color: #8b95a4; }
-tooltip { background-color: #ffffff; color: #202631; border: 1px solid #b8c2cf; }
-tooltip label { color: #202631; }
-"""
+def validate_display_mode(mode: dict | None) -> dict | None:
+    if mode is None:
+        return None
+    if not isinstance(mode, dict) or set(mode) != {"width", "height", "refresh_hz", "monitor"}:
+        raise BackendError("Invalid host display settings.")
+    for key in ("width", "height"):
+        if type(mode[key]) is not int or not 320 <= mode[key] <= 16384:
+            raise BackendError("The guest display must be between 320 and 16384 pixels on each axis.")
+    rate = mode["refresh_hz"]
+    if type(rate) not in (int, float) or not math.isfinite(rate) or not 1 <= rate <= 1000:
+        raise BackendError("Invalid host display refresh rate.")
+    monitor = mode["monitor"]
+    if not isinstance(monitor, str) or len(monitor) > 256 or any(ord(c) < 32 for c in monitor):
+        raise BackendError("Invalid host display monitor.")
+    return dict(mode)
 
 
-def display_environment(runtime: Path, *, sandboxed: bool) -> dict[str, str]:
-    """Return child-only overrides; cosmetic failures must not block a VM boot."""
-    data = runtime / "display"
-    if ":" in str(data):
-        return {"GTK_THEME": "Adwaita:light"}
-    temporary = None
-    try:
-        target = runtime
-        for part in ("display", "themes", _THEME, "gtk-3.0"):
-            target /= part
-            if target.is_symlink():
-                raise OSError("Display theme directories must not be symbolic links.")
-            target.mkdir(mode=0o700, exist_ok=True)
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target, delete=False) as stream:
-            temporary = Path(stream.name)
-            stream.write(_CSS)
-        temporary.replace(target / "gtk.css")
-    except OSError:
-        return {"GTK_THEME": "Adwaita:light"}
-    finally:
-        if temporary is not None:
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
-                pass  # Cosmetic cleanup must not prevent Windows from starting.
-    defaults = _SANDBOX_DATA if sandboxed else (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share")
-    return {"GTK_THEME": _THEME, "XDG_DATA_DIRS": f"{data}:{defaults}"}
+def apply_guest_display(runtime: Path, mode: dict, request_id: str, active, save) -> None:
+    """Run in a daemon worker; never hold up boot or the Qt event loop."""
+    from .guest_agent import GuestAgent
+
+    request = {**mode, "request_id": request_id}
+    deadline = time.monotonic() + 180
+    launch_after = 0
+    install_attempted = False
+    last_error = "Windows display integration has not responded."
+    while time.monotonic() < deadline and active():
+        try:
+            with GuestAgent(runtime / "qga.sock") as agent:
+                if not active():
+                    return
+                if time.monotonic() >= launch_after:
+                    agent.write_text("C:\\ProgramData\\Virtue\\display-request.json", json.dumps(request))
+                    try:
+                        agent.start_display_task()
+                    except ValueError:
+                        if install_attempted:
+                            raise
+                        install_attempted = True
+                        agent.install_display_task()
+                        agent.start_display_task()
+                    launch_after = time.monotonic() + 15
+                text = agent.read_text("C:\\ProgramData\\Virtue\\display-status.json", 16 * 1024)
+            result = json.loads(text)
+            if (isinstance(result, dict) and result.get("request_id") == request_id
+                    and result.get("state") in {"applied", "unsupported", "error"}):
+                if result["state"] == "applied":
+                    validate_display_mode({key: result.get(key) for key in mode})
+                if active():
+                    save({**result, "requested": mode})
+                return
+        except (OSError, ValueError, KeyError, TypeError, BackendError) as exc:
+            last_error = str(exc)
+        time.sleep(min(3, max(0, deadline - time.monotonic())))
+    if active():
+        save({"state": "error", "request_id": request_id, "requested": mode,
+              "message": "Could not match the Windows display. " + last_error})

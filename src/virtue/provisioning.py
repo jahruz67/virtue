@@ -62,7 +62,7 @@ def answer_file(config, image: dict, password: str) -> str:
 def repair_version() -> str:
     guest = support_folder("guest")
     version = {name: file_digest(guest / name) for name in (
-        "Install-VirtueGuest.ps1", "Collect-VirtueGpuReport.ps1", "Retry setup.cmd")}
+        "Install-VirtueGuest.ps1", "Collect-VirtueGpuReport.ps1", "Set-VirtueDisplay.ps1", "Retry setup.cmd")}
     version["assets"] = {key: spec["sha256"] for key, spec in asset_specs().items()}
     return hashlib.sha256(json.dumps(version, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -77,7 +77,7 @@ def _write_setup_media(target: Path, credentials: Path, assets: dict[str, Path],
             shutil.copy2(support_folder("guest") / "Retry setup.cmd", files / "Retry setup.cmd")
             (files / "setup-version.txt").write_text(repair_version(), encoding="utf-8")
         shutil.copy2(credentials, files / "windows-account.json")
-        for name in ("Install-VirtueGuest.ps1", "Collect-VirtueGpuReport.ps1"):
+        for name in ("Install-VirtueGuest.ps1", "Collect-VirtueGpuReport.ps1", "Set-VirtueDisplay.ps1"):
             shutil.copy2(support_folder("guest") / name, files / name)
         shutil.copy2(assets["guest"], files / "YttriumDrivers.zip")
         shutil.copy2(assets["vulkan"], files / "VulkanRT.exe")

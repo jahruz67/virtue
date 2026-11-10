@@ -200,7 +200,7 @@ def test_repair_media_refreshes_scripts_without_windows_installation_answers(tmp
     account_before = credentials.read_bytes()
     guest = tmp_path / "guest"
     guest.mkdir()
-    for name in ("Install-VirtueGuest.ps1", "Collect-VirtueGpuReport.ps1", "Retry setup.cmd"):
+    for name in ("Install-VirtueGuest.ps1", "Collect-VirtueGpuReport.ps1", "Set-VirtueDisplay.ps1", "Retry setup.cmd"):
         (guest / name).write_text("version 1")
     assets = {"guest": tmp_path / "drivers.zip", "vulkan": tmp_path / "VulkanRT.exe"}
     for path in assets.values():
@@ -212,6 +212,7 @@ def test_repair_media_refreshes_scripts_without_windows_installation_answers(tmp
         files = Path(args[-1])
         assert not (files / "Autounattend.xml").exists()
         assert (files / "Retry setup.cmd").is_file()
+        assert (files / "Set-VirtueDisplay.ps1").is_file()
         assert (files / "setup-version.txt").read_text() == provisioning.repair_version()
         assert (files / "windows-account.json").read_bytes() == account_before
         Path(args[args.index("-o") + 1]).write_bytes((files / "Install-VirtueGuest.ps1").read_bytes())

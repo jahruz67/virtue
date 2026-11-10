@@ -4,7 +4,7 @@ import html
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QPainter, QPalette
+from PySide6.QtGui import QGuiApplication, QPainter, QPalette
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLayout, QLineEdit, QScrollArea, QSpinBox, QTabWidget,
@@ -108,8 +108,8 @@ class VMDialog(QDialog):
         root.setSpacing(16)
         self.tabs = QTabWidget()
         root.addWidget(self.tabs)
-        basics, resources, devices = QWidget(), QWidget(), QWidget()
-        for page, title in ((basics, "General"), (resources, "Resources"), (devices, "Features")):
+        basics, resources, devices, display = QWidget(), QWidget(), QWidget(), QWidget()
+        for page, title in ((basics, "General"), (resources, "Resources"), (devices, "Features"), (display, "Display")):
             page.setObjectName("settingsPage")
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
@@ -224,6 +224,7 @@ class VMDialog(QDialog):
         self.virtio_network.hide()
         form3.addRow(label("Included automatically:\nGraphics · Vulkan · Network · Sound\nUEFI · TPM · Drivers · Guest agent", "muted", True))
         form3.addRow(label("Guest test signing enabled; Secure Boot disabled. Hardware rendering is verified during setup.", "muted", True))
+        self._display_settings(display, vm)
         self.error = label("", "error", True)
         self.error.hide()
         form.addRow(self.error)
@@ -233,6 +234,45 @@ class VMDialog(QDialog):
         buttons.accepted.connect(self.validate)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
+
+    def _display_settings(self, page, vm):
+        form = QFormLayout(page)
+        form.setContentsMargins(20, 20, 20, 20)
+        form.setSpacing(14)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        self.start_fullscreen = QCheckBox("Start Windows in fullscreen")
+        self.start_fullscreen.setChecked(vm.get("start_fullscreen", False))
+        self.match_host_display = QCheckBox("Match monitor resolution and refresh rate")
+        self.match_host_display.setChecked(vm.get("match_host_display", True))
+        self.display_monitor = QComboBox()
+        self.display_monitor.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.display_monitor.setMinimumContentsLength(12)
+        self.display_monitor.addItem("Monitor containing Virtue", "")
+        for screen in QGuiApplication.screens():
+            size, scale = screen.size(), screen.devicePixelRatio()
+            title = f"{screen.name()} · {round(size.width() * scale)} × {round(size.height() * scale)} · {screen.refreshRate():.0f} Hz"
+            self.display_monitor.addItem(title, screen.name())
+        preferred = vm.get("display_monitor", "")
+        index = self.display_monitor.findData(preferred)
+        if index < 0:
+            self.display_monitor.addItem(f"{preferred} (disconnected; use current monitor)", preferred)
+            index = self.display_monitor.count() - 1
+        self.display_monitor.setCurrentIndex(index)
+        self.display_monitor.setEnabled(self.match_host_display.isChecked())
+        self.match_host_display.toggled.connect(self.display_monitor.setEnabled)
+        self.relative_mouse = QCheckBox("Capture mouse for CAD and games")
+        self.relative_mouse.setToolTip("Use relative mouse movement. Ctrl+Alt+G releases captured input.")
+        self.relative_mouse.setChecked(vm.get("relative_mouse", False))
+        self.grab_on_hover = QCheckBox("Capture keyboard on pointer entry")
+        self.grab_on_hover.setChecked(vm.get("grab_on_hover", False))
+        form.addRow(self.start_fullscreen)
+        form.addRow(self.match_host_display)
+        form.addRow("Match monitor", self.display_monitor)
+        form.addRow(self.relative_mouse)
+        form.addRow(self.grab_on_hover)
+        form.addRow(label("Ctrl+Alt+F toggles VM fullscreen. Ctrl+Alt+G releases captured input. "
+                          "Ctrl+Alt+M shows or hides the viewer controls. Display preferences apply at the next start. "
+                          "The desktop chooses where the VM window opens; move it to the matching monitor if needed.", "muted", True))
 
     def mark_custom(self):
         values = (self.memory.value(), self.cpus.value(), self.disk.value())
@@ -294,6 +334,11 @@ class VMDialog(QDialog):
             "installed": self.installed.isChecked(),
             "storage_bus": self.storage_bus.currentData(),
             "virtio_network": self.virtio_network.isChecked(),
+            "start_fullscreen": self.start_fullscreen.isChecked(),
+            "match_host_display": self.match_host_display.isChecked(),
+            "display_monitor": self.display_monitor.currentData(),
+            "relative_mouse": self.relative_mouse.isChecked(),
+            "grab_on_hover": self.grab_on_hover.isChecked(),
         }
 
 
@@ -336,6 +381,18 @@ def diagnostics_html(host, vms):
     for vm in vms:
         result = vm.get("gpu_verification", vm.get("gpu_status", "No guest acceleration report imported"))
         parts.append(f"<h3>{esc(vm.get('name', 'Windows'))}</h3><p>Configured display: {esc(vm.get('graphics', 'safe'))}</p>")
+        display = vm.get("display_status", {})
+        requested = vm.get("host_display")
+        if requested:
+            parts.append(f"<p>Requested monitor mode: {esc(requested['width'])} × {esc(requested['height'])} "
+                         f"at {esc(requested['refresh_hz'])} Hz · {esc(requested['monitor'])}</p>")
+        if display:
+            parts.append(f"<p>Display matching: {esc(display.get('state', 'unknown'))}<br>{esc(display.get('message', ''))}</p>")
+            if display.get("state") == "applied":
+                parts.append(f"<p>Confirmed Windows mode: {esc(display['width'])} × {esc(display['height'])} "
+                             f"at {esc(display['refresh_hz'])} Hz</p>")
+        if vm.get("hyperv_flags"):
+            parts.append(f"<p>Active Windows CPU optimizations: {esc(', '.join(vm['hyperv_flags']))}</p>")
         if isinstance(result, dict):
             state = result.get("state", "unverified").replace("_", " ")
             parts.append(f"<p><b>Guest verification: {esc(state)}</b></p>")
@@ -348,7 +405,7 @@ def diagnostics_html(host, vms):
                 parts.append("<p>" + "<br>".join(f"{esc(key.replace('_', ' '))}: {esc(value)}" for key, value in evidence.items()) + "</p>")
         else:
             parts.append(f"<p>Guest verification: {esc(result)}</p>")
-    parts.append("<h2>Display controls</h2><p>Windows scales to fit its window. Ctrl+Alt+M shows the controls; the View menu contains fullscreen, scaling and input capture. Ctrl+Alt+F toggles fullscreen; Ctrl+Alt+G releases input. If a shortcut does not respond, show controls first. Audio uses the host default backend.</p>")
+    parts.append("<h2>Display controls</h2><p>F11 toggles Virtue fullscreen; Escape leaves it. Settings → Display controls Windows startup fullscreen, monitor matching and relative mouse capture. Ctrl+Alt+M shows the VM controls; Ctrl+Alt+F toggles VM fullscreen; Ctrl+Alt+G releases input. Audio uses the host default backend.</p>")
     parts.append("<p>New Windows environments install their required graphics and integration drivers automatically. Installation progress and failures appear on the Windows card.</p>")
     return "".join(parts)
 

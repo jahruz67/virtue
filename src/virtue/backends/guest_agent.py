@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import time
 
 
 class GuestAgent:
@@ -84,6 +85,47 @@ class GuestAgent:
             return text
         finally:
             self.execute("guest-file-close", {"handle": handle})
+
+    def write_text(self, path: str, text: str) -> None:
+        data = text.encode("utf-8")
+        if len(data) > 64 * 1024:
+            raise ValueError("The Windows integration request is too large.")
+        handle = self.execute("guest-file-open", {"path": path, "mode": "wb"})
+        try:
+            result = self.execute("guest-file-write", {"handle": handle,
+                                  "buf-b64": base64.b64encode(data).decode("ascii")})
+            if not isinstance(result, dict) or type(result.get("count")) is not int or result["count"] != len(data):
+                raise ValueError("Windows did not write the complete integration request.")
+            self.execute("guest-file-flush", {"handle": handle})
+        finally:
+            self.execute("guest-file-close", {"handle": handle})
+
+    def start_display_task(self) -> None:
+        self._run_display_command("C:\\Windows\\System32\\schtasks.exe", ["/Run", "/TN", "VirtueSetDisplay"])
+
+    def install_display_task(self) -> None:
+        from ..runtime import support_folder
+        path = "C:\\ProgramData\\Virtue\\Set-VirtueDisplay.ps1"
+        self.write_text(path, (support_folder("guest") / "Set-VirtueDisplay.ps1").read_text(encoding="utf-8"))
+        self._run_display_command("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                                  ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                                   "-ExecutionPolicy", "Bypass", "-File", path, "-Register"], timeout=20)
+
+    def _run_display_command(self, path: str, arguments: list[str], *, timeout: int = 5) -> None:
+        result = self.execute("guest-exec", {"path": path, "arg": arguments, "capture-output": True})
+        if not isinstance(result, dict) or type(result.get("pid")) is not int or result["pid"] <= 0:
+            raise ValueError("Windows did not start the display integration task.")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            status = self.execute("guest-exec-status", {"pid": result["pid"]})
+            if not isinstance(status, dict):
+                raise ValueError("Windows returned an invalid display task status.")
+            if status.get("exited"):
+                if status.get("exitcode") != 0:
+                    raise ValueError("Windows could not start display integration. Sign in to the Virtue Windows account.")
+                return
+            time.sleep(0.2)
+        raise ValueError("Windows took too long to start display integration.")
 
     def setup_status(self) -> dict:
         handle = self.execute("guest-file-open", {"path": "C:\\ProgramData\\Virtue\\setup-status.json", "mode": "r"})

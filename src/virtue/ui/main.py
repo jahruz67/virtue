@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QRectF, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QLinearGradient, QPainter, QPainterPath, QPixmap
+from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QLinearGradient, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QBoxLayout, QDialog, QFileDialog, QFrame, QHBoxLayout, QInputDialog,
     QLabel, QLayout, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from .dialogs import ElidedLabel, GRAPHICS_GUIDE, TextDialog, VMDialog, diagnostics_html, label
+from .display import host_display
 from .icons import action_icon, app_icon, icon_button
 from .style import STYLE
 from .tasks import Tasks
@@ -86,9 +87,10 @@ class VMCard(QFrame):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, service, *, auto_refresh=True):
+    def __init__(self, service, *, auto_refresh=True, settings=None):
         super().__init__()
         self.service = service
+        self.settings = settings
         self.host = {}
         self.vms = []
         self._vm_cards = {}
@@ -102,6 +104,20 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(STYLE)
         self.resize(1060, 740)
         self.setMinimumSize(420, 320)
+        if settings is not None and (geometry := settings.value("window/geometry")) is not None:
+            self.restoreGeometry(geometry)
+        self._fullscreen_was_maximized = self.isMaximized()
+        self.fullscreen_action = QAction("Fullscreen", self)
+        self.fullscreen_action.setCheckable(True)
+        self.fullscreen_action.setShortcut("F11")
+        self.fullscreen_action.triggered.connect(self.toggle_fullscreen)
+        self.addAction(self.fullscreen_action)
+        self.exit_fullscreen_action = QAction("Leave fullscreen", self)
+        self.exit_fullscreen_action.setShortcut("Escape")
+        self.exit_fullscreen_action.triggered.connect(self.leave_fullscreen)
+        self.exit_fullscreen_action.setEnabled(self.isFullScreen())
+        self.addAction(self.exit_fullscreen_action)
+        self.fullscreen_action.setChecked(self.isFullScreen())
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
@@ -123,6 +139,12 @@ class MainWindow(QMainWindow):
         self.create_button.setEnabled(False)
         self.create_button.clicked.connect(self.create_vm)
         header.addWidget(self.create_button)
+        view_button = icon_button("monitor", "View")
+        view_menu = QMenu(view_button)
+        view_menu.addAction(self.fullscreen_action)
+        view_menu.addAction(self.exit_fullscreen_action)
+        view_button.setMenu(view_menu)
+        header.addWidget(view_button)
         help_button = icon_button("help", "Help")
         help_menu = QMenu(help_button)
         help_menu.addAction("Setup guide", self.show_graphics_guide)
@@ -176,6 +198,29 @@ class MainWindow(QMainWindow):
             self.timer.start()
         else:
             self.render_vms([])
+
+    def toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.leave_fullscreen()
+        else:
+            self._fullscreen_was_maximized = self.isMaximized()
+            self.showFullScreen()
+
+    def leave_fullscreen(self):
+        if self._fullscreen_was_maximized:
+            self.showMaximized()
+        else:
+            self.showNormal()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "fullscreen_action"):
+            self.fullscreen_action.setChecked(self.isFullScreen())
+            self.exit_fullscreen_action.setEnabled(self.isFullScreen())
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            for button in self.findChildren(QPushButton):
+                if name := button.property("actionIcon"):
+                    button.setIcon(action_icon(name, button.palette().buttonText().color().name()))
 
     def _busy_changed(self, busy):
         locked = busy or self._installation_running()
@@ -299,7 +344,7 @@ class MainWindow(QMainWindow):
     def render_vms(self, vms):
         self.vms = vms
         self.create_button.setObjectName("primary" if not vms else "")
-        self.create_button.setIcon(action_icon("add", "#ffffff" if not vms else "#34445b"))
+        self.create_button.setIcon(action_icon("add", self.create_button.palette().buttonText().color().name()))
         self.create_button.style().unpolish(self.create_button)
         self.create_button.style().polish(self.create_button)
         vm_ids = {vm["id"] for vm in vms}
@@ -531,6 +576,7 @@ class MainWindow(QMainWindow):
             return item
 
         action("Settings…", lambda: self.edit_vm(vm), offline_changes)
+        action("Start fullscreen", lambda: self.start_vm(vm, fullscreen=True), self._can_launch(vm) and stopped)
         action("Shut down", lambda: self.shutdown_vm(vm), active)
         action("Restart…", lambda: self.restart_vm(vm), vm.get("state") == "running")
         if vm.get("state") == "paused":
@@ -574,8 +620,13 @@ class MainWindow(QMainWindow):
                     return
             self._perform("Saving Windows settings…", lambda: self.service.update_vm(vm["id"], options))
 
-    def start_vm(self, vm, safe=False):
-        self._perform("Starting Windows in its desktop window…", lambda: self.service.start_vm(vm["id"], safe_graphics=safe))
+    def start_vm(self, vm, safe=False, *, fullscreen=False):
+        mode = host_display(vm, self.screen())
+        options = {"display_mode": mode} if mode is not None else {}
+        if fullscreen:
+            options["fullscreen"] = True
+        self._perform("Starting Windows in its desktop window…",
+                      lambda: self.service.start_vm(vm["id"], safe_graphics=safe, **options))
 
     def shutdown_vm(self, vm):
         self._perform("Requesting a safe Windows shutdown…", lambda: self.service.shutdown_vm(vm["id"]), allow_during_setup=True)
@@ -665,11 +716,13 @@ class MainWindow(QMainWindow):
         TextDialog("Setup", GRAPHICS_GUIDE, self, rich=True).exec()
 
     def show_display_guide(self):
-        TextDialog("Display", "Ctrl+Alt+M    Show / hide controls\n"
+        TextDialog("Display", "Virtue: F11 toggles fullscreen; Escape leaves fullscreen.\n\n"
+                   "Windows viewer:\nCtrl+Alt+M    Show / hide controls\n"
                    "Ctrl+Alt+F    Fullscreen\n"
                    "Ctrl+Alt+G    Release input\n\n"
                    "If a shortcut does not respond, show controls first.\n"
-                   "View → Zoom To Fit scales Windows to the window.\n"
+                   "Settings → Display controls startup fullscreen, monitor matching and input capture.\n"
+                   "Matching selects a supported guest mode; Zoom To Fit scales the resulting image.\n"
                    "Use Shut down in the library to stop Windows safely.", self).exec()
 
     @staticmethod
@@ -708,8 +761,10 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.timer.stop()
+        if self.settings is not None:
+            self.settings.setValue("window/geometry", self.saveGeometry())
         event.accept()
 
 
-def create_window(service):
-    return MainWindow(service)
+def create_window(service, *, settings=None):
+    return MainWindow(service, settings=settings)

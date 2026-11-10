@@ -66,7 +66,8 @@ def action_icon(name: str, color: str = "#34445b") -> QIcon:
 
 def icon_button(name: str, description: str) -> QPushButton:
     button = QPushButton()
-    button.setIcon(action_icon(name))
+    button.setProperty("actionIcon", name)
+    button.setIcon(action_icon(name, button.palette().buttonText().color().name()))
     button.setIconSize(QSize(18, 18))
     button.setFixedHeight(36)
     button.setMinimumWidth(36)

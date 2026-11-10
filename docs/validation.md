@@ -106,6 +106,18 @@ QEMU, OVMF and swtpm package versions, and Wayland/X11 session type. Follow
 
 ## Recording a new result
 
+Fullscreen/display changes require fresh target-host acceptance; no new latency
+measurements are recorded by this implementation. Check F11/Escape and geometry
+restoration in Virtue, saved VM fullscreen, absolute/relative input, release and
+focus-loss behavior on both Wayland and X11. On standard and high-refresh monitors,
+compare requested and confirmed Windows modes in Host diagnostics, unsupported
+mode fallback, and migration of an existing managed guest. Measure cursor and
+typing latency and frame-time spikes separately; a confirmed mode is not a latency
+measurement. The accelerated GTK viewer remains in use. A replacement D-Bus/DMA-BUF
+viewer requires checking the pinned runtime's capabilities, GPU buffer import and
+synchronization, keyboard capture and independent VM lifetime on Linux. Looking
+Glass remains an alternative for separately qualified passthrough/vGPU hardware.
+
 Append a dated record with source revision (including local changes), host and
 guest versions, exact command or manual procedure, expected and observed outcome,
 exit code/test count where applicable, artifact paths or links, and unresolved

@@ -21,7 +21,7 @@ class QemuCommandTests(unittest.TestCase):
         self.assertIn("kvm", cmd)
         self.assertNotIn("tcg", " ".join(cmd))
         self.assertIn("tpm-crb,tpmdev=tpm0", cmd)
-        self.assertIn("gtk,gl=on,show-menubar=off,show-tabs=off,zoom-to-fit=on", cmd)
+        self.assertIn("gtk,gl=on,show-menubar=on,show-tabs=off,zoom-to-fit=on,grab-on-hover=off", cmd)
         self.assertIn("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", cmd)
         self.assertTrue(any("Windows,,11.iso" in arg for arg in cmd))
         block = json.loads(cmd[cmd.index("-blockdev") + 1])
@@ -50,7 +50,7 @@ class QemuCommandTests(unittest.TestCase):
     def test_safe_fallback_preserves_configuration(self):
         config = self.config(graphics="yttrium", secure_boot=False, graphics_consent=True)
         cmd = self.command(config, safe_graphics=True)
-        self.assertIn("gtk,gl=off,show-menubar=off,show-tabs=off,zoom-to-fit=on", cmd)
+        self.assertIn("gtk,gl=off,show-menubar=on,show-tabs=off,zoom-to-fit=on,grab-on-hover=off", cmd)
         self.assertNotIn("venus=on", " ".join(cmd))
         self.assertEqual(config.graphics, "yttrium")
 
@@ -73,6 +73,24 @@ class QemuCommandTests(unittest.TestCase):
         cmd = self.command(self.config(), fullscreen=True, guest_agent_socket="/run/u/qga.sock")
         self.assertIn("-full-screen", cmd)
         self.assertIn("virtserialport,chardev=qga,name=org.qemu.guest_agent.0", cmd)
+
+    def test_saved_fullscreen_relative_input_and_monitor_resolution(self):
+        config = self.config(start_fullscreen=True, relative_mouse=True, grab_on_hover=True)
+        mode = {"width": 2560, "height": 1440, "refresh_hz": 144.0, "monitor": "DP-1"}
+        cmd = self.command(config, display_mode=mode)
+        self.assertIn("-full-screen", cmd)
+        self.assertIn("usb-mouse,bus=xhci.0", cmd)
+        self.assertNotIn("usb-tablet,bus=xhci.0", cmd)
+        self.assertIn("virtio-vga-gl,hostmem=4G,blob=on,venus=on,edid=on,xres=2560,yres=1440", cmd)
+        self.assertIn("grab-on-hover=on", cmd[cmd.index("-display") + 1])
+
+    def test_untrusted_display_modes_are_rejected(self):
+        mode = {"width": 1920, "height": 1080, "refresh_hz": 60, "monitor": "DP-1"}
+        for invalid in ({**mode, "width": True}, {**mode, "height": "1080,venus=off"},
+                        {**mode, "refresh_hz": float("nan")}, {**mode, "refresh_hz": True},
+                        {**mode, "monitor": "screen\n"}, {"width": 1920}):
+            with self.subTest(invalid=invalid), self.assertRaises(BackendError):
+                self.command(self.config(), display_mode=invalid)
 
     def test_automatic_setup_media_and_status_channel(self):
         cmd = self.command(self.config(drivers_iso_path="/cache/virtio.iso"), setup_iso="/data/virtue-setup.iso")

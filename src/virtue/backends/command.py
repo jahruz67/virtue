@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .backend import BackendError
+from .display import validate_display_mode
 
 
 def option(value: str | Path) -> str:
@@ -35,6 +36,7 @@ def build_qemu_command(
     guest_agent_socket: str | Path | None = None,
     setup_iso: str | Path | None = None,
     repair_setup: bool = False,
+    display_mode: dict | None = None,
 ) -> list[str]:
     graphics = "safe" if safe_graphics else config.graphics
     if graphics == "yttrium" and (config.secure_boot or not config.graphics_consent):
@@ -43,6 +45,9 @@ def build_qemu_command(
         raise BackendError("Unknown graphics configuration.")
     if int(config.memory_mib) < 4096 or int(config.cpus) < 2:
         raise BackendError("Windows requires at least 4 GiB RAM and two virtual CPUs.")
+    display_mode = validate_display_mode(display_mode)
+    if not getattr(config, "match_host_display", True):
+        display_mode = None
     command = [qemu] if isinstance(qemu, str) else list(qemu)
     if accelerator not in {"kvm", "kvm,honor-guest-pat=on"}:
         raise BackendError("Only the Linux KVM accelerator is supported.")
@@ -69,7 +74,8 @@ def build_qemu_command(
         "-chardev", f"socket,id=chrtpm,path={option(tpm_socket)}",
         "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-crb,tpmdev=tpm0",
         "-qmp", f"unix:{option(qmp_socket)},server=on,wait=off",
-        "-device", "qemu-xhci,id=xhci", "-device", "usb-tablet,bus=xhci.0",
+        "-device", "qemu-xhci,id=xhci",
+        "-device", "usb-mouse,bus=xhci.0" if getattr(config, "relative_mouse", False) else "usb-tablet,bus=xhci.0",
         "-device", "usb-kbd,bus=xhci.0",
     ]
     # JSON blockdev keeps filenames opaque, including commas and colons.
@@ -108,12 +114,19 @@ def build_qemu_command(
                     "-chardev", f"socket,id=qga,path={option(guest_agent_socket)},server=on,wait=off",
                     "-device", "virtserialport,chardev=qga,name=org.qemu.guest_agent.0"]
     if graphics == "yttrium":
+        gpu = "virtio-vga-gl,hostmem=4G,blob=on,venus=on"
+        if display_mode:
+            gpu += f",edid=on,xres={display_mode['width']},yres={display_mode['height']}"
         command += ["-object", f"memory-backend-memfd,id=ram,size={config.memory_mib}M,share=on",
-                    "-device", "virtio-vga-gl,hostmem=4G,blob=on,venus=on", "-vga", "none",
-                    "-display", "gtk,gl=on,show-menubar=off,show-tabs=off,zoom-to-fit=on"]
+                    "-device", gpu, "-vga", "none"]
     else:
-        command += ["-device", "VGA,vgamem_mb=64", "-display", "gtk,gl=off,show-menubar=off,show-tabs=off,zoom-to-fit=on"]
-    if fullscreen:
+        command += ["-device", "VGA,vgamem_mb=64"]
+    # Keep controls discoverable and keyboard focus deliberate. GTK owns focus-loss
+    # key releases and monitor-paced rendering; do not add a Python frame timer.
+    display = f"gtk,gl={'on' if graphics == 'yttrium' else 'off'},show-menubar=on,show-tabs=off,zoom-to-fit=on"
+    display += f",grab-on-hover={'on' if getattr(config, 'grab_on_hover', False) else 'off'}"
+    command += ["-display", display]
+    if fullscreen or getattr(config, "start_fullscreen", False):
         command += ["-full-screen"]
     if audio_backend:
         if audio_backend not in {"pa", "pipewire", "alsa", "sdl"}:

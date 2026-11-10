@@ -51,10 +51,20 @@ graphics toggle or manual installation-complete checkbox are part of this flow.
 Use **Retry / repair setup** or **Retry automatic setup** if setup reports a failure.
 
 Windows remains a separately managed guest. Fullscreen, scaling, keyboard/mouse
-capture and audio use QEMU GTK. The display scales to fit its window; menus and
-console tabs are hidden initially. Ctrl+Alt+M shows the controls, Ctrl+Alt+F toggles
-fullscreen, and Ctrl+Alt+G releases input (show controls first if needed). The VM
-process uses its own light GTK theme; desktop-managed title bars may vary.
+capture and audio use QEMU GTK. **Settings → Display** saves startup fullscreen,
+the monitor to match, relative mouse capture for CAD/games and optional keyboard
+capture on hover. **Start fullscreen** is also available in the Windows menu.
+The guest requests the selected monitor's physical resolution and chooses the
+closest supported refresh rate after sign-in; unsupported modes leave its current
+display intact. Windows DPI is preserved. The desktop chooses the VM window's
+placement, so move it to the matching monitor if needed. Menus are visible initially;
+Ctrl+Alt+M toggles the controls, Ctrl+Alt+F toggles fullscreen, and Ctrl+Alt+G releases
+input. GTK uses its normal desktop/Flatpak theme selection. F11 toggles Virtue's own fullscreen; Escape exits
+it. Virtue remembers its window geometry and fullscreen state.
+**Host diagnostics** distinguishes the requested monitor mode from the confirmed
+Windows mode. Existing managed guests receive display integration automatically
+through the guest agent if needed. Matching runs asynchronously and cannot block
+VM boot; it requires signing in to the generated Virtue Windows account.
 The default user network permits outbound connections without opening host ports.
 Clipboard, shared folders, seamless individual apps and multi-monitor integration
 are not implemented in this preview.

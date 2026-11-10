@@ -33,8 +33,10 @@ class FakeService:
     def list_vms(self):
         return [dict(VM)]
 
-    def start_vm(self, vm_id, safe_graphics=False):
+    def start_vm(self, vm_id, safe_graphics=False, *, display_mode=None, fullscreen=False):
         self.calls.append(("start", vm_id, safe_graphics))
+        self.display_mode = display_mode
+        self.fullscreen = fullscreen
         self.worker_thread = QThread.currentThread()
 
     def enable_yttrium(self, vm_id, consent):
@@ -69,6 +71,33 @@ def test_launch_button_uses_background_service_and_safe_mode(app):
     wait_for_idle(app, window)
     assert service.calls[-1] == ("start", "vm-test", True)
     window.close()
+
+
+def test_fullscreen_launch_passes_monitor_snapshot_to_worker(app):
+    service, window = ready_window(app)
+    window.start_vm(VM, fullscreen=True)
+    wait_for_idle(app, window)
+    assert service.fullscreen
+    assert service.display_mode["width"] >= 320
+    assert service.display_mode["height"] >= 320
+    assert service.display_mode["refresh_hz"] > 0
+    window.fullscreen_action.trigger()
+    assert window.isFullScreen()
+    assert window.exit_fullscreen_action.isEnabled()
+    window.exit_fullscreen_action.trigger()
+    assert not window.isFullScreen()
+    window.close()
+
+
+def test_display_settings_preserve_saved_preferences(app):
+    vm = {**VM, "start_fullscreen": True, "relative_mouse": True, "grab_on_hover": True,
+          "display_monitor": "disconnected-monitor", "match_host_display": False}
+    dialog = VMDialog(HOST, vm)
+    options = dialog.options()
+    for key in ("start_fullscreen", "relative_mouse", "grab_on_hover", "display_monitor", "match_host_display"):
+        assert options[key] == vm[key]
+    assert not dialog.display_monitor.isEnabled()
+    dialog.close()
 
 
 def test_status_poll_stays_interactive_and_queues_user_actions(app):

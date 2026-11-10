@@ -56,7 +56,7 @@ class Tasks(QObject):
         work.signals.completed.connect(self._complete)
         if self.blocking_busy != was_blocking:
             self.changed.emit(self.blocking_busy)
-        self.pool.start(work)
+        self.pool.start(work, 1 if blocking else -1)
 
     @Slot(int, object, object)
     def _complete(self, number, result, error):
