@@ -110,9 +110,9 @@ def build_qemu_command(
     if graphics == "yttrium":
         command += ["-object", f"memory-backend-memfd,id=ram,size={config.memory_mib}M,share=on",
                     "-device", "virtio-vga-gl,hostmem=4G,blob=on,venus=on", "-vga", "none",
-                    "-display", "gtk,gl=on"]
+                    "-display", "gtk,gl=on,show-menubar=off,show-tabs=off,zoom-to-fit=on"]
     else:
-        command += ["-device", "VGA,vgamem_mb=64", "-display", "gtk,gl=off"]
+        command += ["-device", "VGA,vgamem_mb=64", "-display", "gtk,gl=off,show-menubar=off,show-tabs=off,zoom-to-fit=on"]
     if fullscreen:
         command += ["-full-screen"]
     if audio_backend:

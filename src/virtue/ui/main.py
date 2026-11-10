@@ -5,31 +5,84 @@ import os
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap, QPolygon
+from PySide6.QtCore import QRectF, Qt, QTimer, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QLinearGradient, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QInputDialog,
-    QLabel, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton,
+    QApplication, QBoxLayout, QDialog, QFileDialog, QFrame, QHBoxLayout, QInputDialog,
+    QLabel, QLayout, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from .dialogs import GRAPHICS_GUIDE, TextDialog, VMDialog, diagnostics_html, label
+from .dialogs import ElidedLabel, GRAPHICS_GUIDE, TextDialog, VMDialog, diagnostics_html, label
+from .icons import action_icon, app_icon, icon_button
 from .style import STYLE
 from .tasks import Tasks
 
 
-def app_icon():
-    pixmap = QPixmap(64, 64)
+def windows_artwork():
+    """Decorative environment artwork, not a live guest screenshot."""
+    pixmap = QPixmap(288, 180)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor("#64dcc1"))
+    clip = QPainterPath()
+    clip.addRoundedRect(QRectF(0, 0, 288, 180), 16, 16)
+    painter.setClipPath(clip)
+    gradient = QLinearGradient(0, 0, 288, 180)
+    gradient.setColorAt(0, QColor("#183b91"))
+    gradient.setColorAt(1, QColor("#498af0"))
+    painter.fillRect(pixmap.rect(), gradient)
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawRoundedRect(2, 2, 60, 60, 15, 15)
-    painter.setBrush(QColor("#102c32"))
-    painter.drawPolygon(QPolygon([QPoint(x, y) for x, y in [(14, 19), (24, 19), (32, 41), (40, 19), (50, 19), (36, 49), (28, 49)]]))
+    for color, rect in (
+        ("#3579e6", QRectF(-65, 70, 330, 220)),
+        ("#65a5fa", QRectF(105, -120, 290, 250)),
+        ("#2863cf", QRectF(135, -95, 240, 205)),
+    ):
+        painter.setBrush(QColor(color))
+        painter.drawEllipse(rect)
+    painter.setBrush(QColor("#ffffff"))
+    for x in (123, 146):
+        for y in (69, 92):
+            painter.drawRect(x, y, 19, 19)
     painter.end()
-    return QIcon(pixmap)
+    pixmap.setDevicePixelRatio(2)
+    return pixmap
+
+
+class VMCard(QFrame):
+    """Keep the same controls while adapting their arrangement to card width."""
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("card")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self.row = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self.row.setContentsMargins(20, 22, 20, 22)
+        self.row.setSpacing(20)
+        self.preview = QLabel()
+        self.preview.setObjectName("vmPreview")
+        self.preview.setFixedSize(144, 90)
+        self.preview.setPixmap(windows_artwork())
+        self.row.addWidget(self.preview)
+        self.content = QVBoxLayout()
+        self.content.setSpacing(7)
+        self.row.addLayout(self.content, 1)
+        self.actions = QBoxLayout(QBoxLayout.Direction.TopToBottom)
+        self.row.addLayout(self.actions)
+        self._compact = None
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        compact = self.width() < 560
+        if compact == self._compact:
+            return
+        self._compact = compact
+        self.preview.setVisible(not compact)
+        self.row.setDirection(QBoxLayout.Direction.TopToBottom if compact else QBoxLayout.Direction.LeftToRight)
+        margins = (16, 16, 16, 16) if compact else (20, 22, 20, 22)
+        self.row.setContentsMargins(*margins)
+        self.row.setSpacing(14 if compact else 20)
+        self.actions.setDirection(QBoxLayout.Direction.LeftToRight if compact else QBoxLayout.Direction.TopToBottom)
 
 
 class MainWindow(QMainWindow):
@@ -38,76 +91,83 @@ class MainWindow(QMainWindow):
         self.service = service
         self.host = {}
         self.vms = []
+        self._vm_cards = {}
+        self._empty_card = None
         self._last_poll_error = ""
         self.tasks = Tasks(self)
         self.tasks.changed.connect(self._busy_changed)
         self.tasks.progress.connect(self._setup_progress)
-        self.setWindowTitle("Virtue · Windows, within reach")
+        self.setWindowTitle("Windows")
         self.setWindowIcon(app_icon())
         self.setStyleSheet(STYLE)
-        self.resize(1060, 780)
-        self.setMinimumSize(760, 600)
+        self.resize(1060, 740)
+        self.setMinimumSize(420, 320)
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(34, 26, 34, 16)
-        root.setSpacing(20)
-        header = QHBoxLayout()
-        mark = QLabel()
-        mark.setPixmap(app_icon().pixmap(QSize(38, 38)))
-        header.addWidget(mark)
-        header.addWidget(label("virtue", "brand"))
-        header.addStretch()
-        self.diagnostics_button = QPushButton("Host && diagnostics")
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        toolbar = QFrame()
+        toolbar.setObjectName("toolbar")
+        header = QHBoxLayout(toolbar)
+        header.setContentsMargins(24, 16, 24, 16)
+        header.setSpacing(10)
+        self.diagnostics_button = icon_button("monitor", "Host diagnostics")
         self.diagnostics_button.clicked.connect(self.show_diagnostics)
         header.addWidget(self.diagnostics_button)
-        self.import_button = QPushButton("Import backup…")
+        header.addStretch()
+        self.import_button = icon_button("import", "Import Windows backup")
         self.import_button.clicked.connect(self.import_vm)
         header.addWidget(self.import_button)
-        root.addLayout(header)
-        heading = QHBoxLayout()
-        words = QVBoxLayout()
-        words.setSpacing(7)
-        words.addWidget(label("YOUR WORKSPACE", "eyebrow"))
-        words.addWidget(label("Windows, within reach.", "headline"))
-        words.addWidget(label("A familiar desktop. A place for your Windows work.", "muted"))
-        heading.addLayout(words, 1)
-        self.create_button = QPushButton("+  Create Windows")
-        self.create_button.setObjectName("primary")
+        self.create_button = icon_button("add", "Create Windows")
         self.create_button.setEnabled(False)
         self.create_button.clicked.connect(self.create_vm)
-        heading.addWidget(self.create_button, alignment=Qt.AlignmentFlag.AlignBottom)
-        root.addLayout(heading)
+        header.addWidget(self.create_button)
+        help_button = icon_button("help", "Help")
+        help_menu = QMenu(help_button)
+        help_menu.addAction("Setup guide", self.show_graphics_guide)
+        help_menu.addAction("Display shortcuts", self.show_display_guide)
+        help_menu.addAction("Open guides", lambda: self.open_support_folder("docs"))
+        help_button.setMenu(help_menu)
+        header.addWidget(help_button)
+        root.addWidget(toolbar)
+        workspace = QWidget()
+        workspace.setObjectName("workspace")
+        body = QVBoxLayout(workspace)
+        body.setContentsMargins(28, 28, 28, 16)
+        body.setSpacing(20)
         self.banner = QFrame()
         self.banner.setObjectName("banner")
         banner_layout = QHBoxLayout(self.banner)
         banner_layout.setContentsMargins(16, 12, 16, 12)
-        self.banner_text = label("Checking your host and virtualization dependencies…", wrap=True)
+        self.banner_text = ElidedLabel("Checking host…")
         banner_layout.addWidget(self.banner_text, 1)
-        self.repair_button = QPushButton("Retry / repair setup")
+        self.repair_button = QPushButton("Repair")
+        self.repair_button.setToolTip("Retry / repair setup")
         self.repair_button.clicked.connect(self.repair_setup)
+        repair_policy = self.repair_button.sizePolicy()
+        repair_policy.setRetainSizeWhenHidden(True)
+        self.repair_button.setSizePolicy(repair_policy)
         self.repair_button.hide()
         banner_layout.addWidget(self.repair_button)
-        root.addWidget(self.banner)
+        body.addWidget(self.banner)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        scroll.setMinimumSize(0, 0)
         self.cards = QWidget()
+        self.cards.setObjectName("vmList")
         self.cards_layout = QVBoxLayout(self.cards)
-        self.cards_layout.setContentsMargins(0, 0, 8, 0)
-        self.cards_layout.setSpacing(14)
+        self.cards_layout.setContentsMargins(0, 0, 6, 0)
+        self.cards_layout.setSpacing(12)
+        self.cards_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        self.cards_layout.addStretch()
         scroll.setWidget(self.cards)
-        root.addWidget(scroll, 1)
-        footer = QHBoxLayout()
-        footer.addWidget(label("LINUX FIRST  ·  QEMU / KVM", "eyebrow"))
-        footer.addStretch()
-        help_button = QPushButton("Help  ▾")
-        help_menu = QMenu(help_button)
-        help_menu.addAction("Automatic Windows setup", self.show_graphics_guide)
-        help_menu.addAction("Open setup guides", lambda: self.open_support_folder("docs"))
-        help_button.setMenu(help_menu)
-        footer.addWidget(help_button)
-        root.addLayout(footer)
-        self.statusBar().showMessage("Ready")
+        body.addWidget(scroll, 1)
+        root.addWidget(workspace, 1)
+        status = self.statusBar()
+        status.setSizeGripEnabled(False)
         self.timer = QTimer(self)
         self.timer.setInterval(4000)
         self.timer.timeout.connect(self._poll)
@@ -124,6 +184,16 @@ class MainWindow(QMainWindow):
         self.diagnostics_button.setEnabled(not busy)
         self.cards.setEnabled(not busy)
         self.repair_button.setEnabled(not locked)
+        for card in self._vm_cards.values():
+            card.launch.setEnabled(self._can_launch(card.vm))
+
+    def _can_launch(self, vm):
+        return vm.get("state") == "paused" or (
+            not self._installation_running()
+            and not (vm.get("auto_setup") and not vm.get("installed", False))
+            and vm.get("state", "stopped") == "stopped" and not self.vm_active(vm)
+            and bool(self.host.get("ready"))
+        )
 
     def _installation_running(self):
         return any(
@@ -134,19 +204,22 @@ class MainWindow(QMainWindow):
         )
 
     def _setup_progress(self, message):
-        self.banner_text.setText(message)
         self.statusBar().showMessage(message)
+        if not self.host.get("ready"):
+            self.banner_text.setText(message)
 
     def _setup_failed(self, error):
-        self.banner_text.setText(str(error))
-        self.repair_button.show()
+        if not self.host.get("ready"):
+            self.banner_text.setText(str(error))
+            self.banner.show()
+            self.repair_button.show()
         self._error(error)
         self.refresh_list(quiet=True)
 
     def _error(self, error):
         message = str(error) or type(error).__name__
         self.statusBar().showMessage(message)
-        QMessageBox.warning(self, "Unable to complete this action", message)
+        QMessageBox.warning(self, "Unable to complete action", message)
 
     def _perform(self, message, fn, success=None, *, refresh=True, failure=None, allow_during_setup=False):
         if self.tasks.blocking_busy or (self._installation_running() and not allow_during_setup):
@@ -154,7 +227,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message)
 
         def complete(value):
-            self.statusBar().showMessage("Ready")
+            self.statusBar().clearMessage()
             if success:
                 success(value)
             if refresh:
@@ -190,13 +263,18 @@ class MainWindow(QMainWindow):
         def updated(vms):
             if self.tasks.blocking_busy or QApplication.activeModalWidget() is not None or QApplication.activePopupWidget() is not None:
                 return
+            if self._last_poll_error and self.statusBar().currentMessage() == self._last_poll_error:
+                self.statusBar().clearMessage()
+            self._last_poll_error = ""
             if vms != self.vms:
                 self.render_vms(vms)
 
         def failure(error):
             # A disconnected VM should not generate a modal alert every four seconds.
             if quiet:
-                self.statusBar().showMessage(f"Status refresh failed: {error}")
+                if not self.tasks.blocking_busy:
+                    self._last_poll_error = f"Status refresh failed: {error}"
+                    self.statusBar().showMessage(self._last_poll_error)
             else:
                 self._error(error)
 
@@ -205,69 +283,106 @@ class MainWindow(QMainWindow):
 
     def render_host(self):
         if self.host.get("ready"):
-            self.banner_text.setText("Ready. Choose your Windows ISO; Virtue handles installation, drivers and Yttrium graphics automatically.")
+            self.banner_text.clear()
             self.banner.setObjectName("banner")
         else:
             missing = [c.get("name", "Dependency") for c in self.host.get("checks", []) if c.get("required") and not c.get("ok")]
             detail = ", ".join(missing) if missing else "a compatible Linux x86-64 host and working KVM"
-            self.banner_text.setText(f"Setup needs attention: {detail}. Use Retry / repair setup; no terminal is needed.")
+            self.banner_text.setText(f"Setup required: {detail}.")
             self.banner.setObjectName("warning")
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
         self._busy_changed(self.tasks.blocking_busy)
         self.repair_button.setVisible(not bool(self.host.get("ready")))
+        self.banner.setVisible(not bool(self.host.get("ready")))
 
     def render_vms(self, vms):
         self.vms = vms
-        while self.cards_layout.count():
-            item = self.cards_layout.takeAt(0)
-            if item.widget():
-                item.widget().hide()
-                item.widget().deleteLater()
-        if not vms:
+        self.create_button.setObjectName("primary" if not vms else "")
+        self.create_button.setIcon(action_icon("add", "#ffffff" if not vms else "#34445b"))
+        self.create_button.style().unpolish(self.create_button)
+        self.create_button.style().polish(self.create_button)
+        vm_ids = {vm["id"] for vm in vms}
+        for vm_id in self._vm_cards.keys() - vm_ids:
+            card = self._vm_cards.pop(vm_id)
+            self.cards_layout.removeWidget(card)
+            card.hide()
+            card.deleteLater()
+        if self._empty_card is not None:
+            self.cards_layout.removeWidget(self._empty_card)
+            self._empty_card.hide()
+        if not vms and self._empty_card is None:
             empty = QFrame()
             empty.setObjectName("card")
             layout = QVBoxLayout(empty)
             layout.setContentsMargins(30, 48, 30, 48)
             layout.setSpacing(14)
-            title = label("Your next Windows desktop starts here.", "sectionTitle")
+            artwork = QLabel()
+            artwork.setPixmap(windows_artwork())
+            artwork.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(artwork)
+            title = label("No Windows environments", "sectionTitle", True)
             title.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(title)
-            sub = label("Bring your Windows ISO. We’ll handle the virtual disk, firmware and trusted platform module.", "muted", True)
+            sub = label("Select + to add Windows.", "muted", True)
             sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(sub)
-            persistence = label("Your files and installed applications stay with your Windows environment.", "muted", True)
-            persistence.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(persistence)
-            self.cards_layout.addWidget(empty)
-        for vm in vms:
-            self.cards_layout.addWidget(self.vm_card(vm))
-        self.cards_layout.addStretch()
+            self._empty_card = empty
+        if not vms:
+            self.cards_layout.insertWidget(0, self._empty_card)
+            self._empty_card.show()
+        for index, vm in enumerate(vms):
+            card = self._vm_cards.get(vm["id"])
+            if card is None:
+                card = self.vm_card(vm)
+                self._vm_cards[vm["id"]] = card
+            else:
+                self._update_vm_card(card, vm)
+            if self.cards_layout.indexOf(card) != index:
+                self.cards_layout.insertWidget(index, card)
         self._busy_changed(self.tasks.blocking_busy)
 
     def vm_card(self, vm):
-        card = QFrame()
-        card.setObjectName("card")
-        row = QHBoxLayout(card)
-        row.setContentsMargins(24, 23, 20, 23)
-        row.setSpacing(22)
-        tile = QLabel("W")
-        tile.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        tile.setFixedSize(68, 68)
-        tile.setStyleSheet("background:#254451; border-radius:14px; color:#84ead5; font-size:34px; font-weight:600;")
-        row.addWidget(tile)
-        content = QVBoxLayout()
-        content.setSpacing(7)
+        card = VMCard()
+        content = card.content
         top = QHBoxLayout()
-        top.addWidget(label(vm.get("name", "Windows"), "vmTitle"))
-        top.addStretch()
-        state = str(vm.get("state", "stopped"))
-        status = label("●  " + state.replace("_", " ").capitalize())
-        status.setStyleSheet("color: #80dfc8;" if state == "running" else "color: #b2c2d5;")
-        top.addWidget(status)
+        card.title = label("", "vmTitle", True)
+        top.addWidget(card.title, 1)
+        card.status = label("", "statusChip")
+        top.addWidget(card.status, alignment=Qt.AlignmentFlag.AlignTop)
         content.addLayout(top)
+        card.summary = label("", "muted", True)
+        content.addWidget(card.summary)
+        card.indicator = None
+        card.setup_text = ElidedLabel()
+        card.setup_text.setObjectName("muted")
+        content.addWidget(card.setup_text)
+        card.error_text = label("", "attention", True)
+        card.error_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        content.addWidget(card.error_text)
+        card.launch = QPushButton()
+        card.launch.setObjectName("primary")
+        card.launch.clicked.connect(lambda: self.resume_vm(card.vm) if card.vm.get("state") == "paused" else self.start_vm(card.vm))
+        card.actions.addWidget(card.launch)
+        card.retry = QPushButton("Retry")
+        card.retry.setToolTip("Retry automatic setup")
+        card.retry.clicked.connect(lambda: self._perform("Retrying automatic Windows setup…", lambda: self.service.retry_setup(card.vm["id"], self.tasks.progress.emit), allow_during_setup=True))
+        card.actions.addWidget(card.retry)
+        card.more = icon_button("more", "Manage Windows")
+        card.actions.addWidget(card.more)
+        self._update_vm_card(card, vm)
+        return card
+
+    def _update_vm_card(self, card, vm):
+        card.vm = vm
+        card.title.setText(vm.get("name", "Windows"))
+        state = str(vm.get("state", "stopped"))
+        card.status.setText(state.replace("_", " ").capitalize())
+        if card.status.property("running") != (state == "running"):
+            card.status.setProperty("running", state == "running")
+            card.status.style().unpolish(card.status)
+            card.status.style().polish(card.status)
         version = str(vm.get("windows_version", "11"))
-        content.addWidget(label(f"Windows {version}  ·  {vm.get('memory_mib', 0) / 1024:g} GiB RAM  ·  {vm.get('cpus', '?')} vCPUs", "muted"))
         used = vm.get("storage_bytes", 0) or 0
         disk = vm.get("disk_gib", 0)
         description = f"{used / (1024 ** 3):.1f} GiB on disk / {disk} GiB capacity"
@@ -278,40 +393,38 @@ class MainWindow(QMainWindow):
             description += "  ·  Yttrium graphics" if active_graphics == "yttrium" else "  ·  Compatible display"
         if not vm.get("installed", False) and not vm.get("auto_setup"):
             description += "  ·  Installation in progress"
-        content.addWidget(label(description, "muted", True))
+        card.summary.setText(f"Windows {version}  ·  {vm.get('memory_mib', 0) / 1024:g} GiB  ·  {vm.get('cpus', '?')} CPUs")
+        card.summary.setToolTip(description)
+        card.summary.setAccessibleDescription(description)
         setup = vm.get("setup", {})
-        if vm.get("auto_setup"):
-            content.addWidget(self.setup_indicator(vm))
-        elif setup:
-            content.addWidget(label(str(setup.get("message", "Installing Windows automatically…")), "muted", True))
-        if vm.get("error"):
-            error = label(str(vm["error"]), wrap=True)
-            error.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
-            error.setStyleSheet("color:#ffc08c;")
-            content.addWidget(error)
-        row.addLayout(content, 1)
-        actions = QVBoxLayout()
         setup_pending = bool(vm.get("auto_setup")) and not vm.get("installed", False)
-        launch = QPushButton("Resume Windows" if state == "paused" else "Launch Windows")
-        launch.setObjectName("primary")
-        launch.setEnabled(state == "paused" or (not self._installation_running() and not setup_pending and state == "stopped" and not self.vm_active(vm) and bool(self.host.get("ready"))))
-        launch.clicked.connect(lambda: self.resume_vm(vm) if state == "paused" else self.start_vm(vm))
+        if setup_pending:
+            if card.indicator is None:
+                card.indicator = self.setup_indicator(vm)
+                card.content.insertWidget(2, card.indicator)
+            else:
+                self.setup_indicator(vm, card.indicator)
+        if card.indicator is not None:
+            card.indicator.setVisible(setup_pending)
+        card.setup_text.setText(str(setup.get("message", "Installing Windows automatically…")))
+        card.setup_text.setVisible(bool(setup) and not vm.get("installed", False) and not setup_pending)
+        card.error_text.setText(str(vm.get("error") or ""))
+        card.error_text.setVisible(bool(vm.get("error")))
+        card.launch.setText("Resume" if state == "paused" else "Start")
+        card.launch.setAccessibleName(("Resume " if state == "paused" else "Start ") + vm.get("name", "Windows"))
+        card.launch.setEnabled(self._can_launch(vm))
         if setup_pending and state != "paused":
-            launch.setToolTip("Windows installs automatically. Launch is available after setup completes. If installation stops, use Retry automatic setup.")
+            card.launch.setToolTip("Windows installs automatically. Launch is available after setup completes. If installation stops, use Retry automatic setup.")
         else:
-            launch.setToolTip("Open the QEMU desktop window. A running VM already has its own display window." if state == "running" else "Boot your Windows environment")
-        actions.addWidget(launch)
-        if setup.get("state") == "error" or (setup_pending and state == "stopped" and not self.vm_active(vm)):
-            retry = QPushButton("Retry automatic setup")
-            retry.clicked.connect(lambda: self._perform("Retrying automatic Windows setup…", lambda: self.service.retry_setup(vm["id"], self.tasks.progress.emit), allow_during_setup=True))
-            actions.addWidget(retry)
-        more = QPushButton("Manage Windows  ▾")
-        more.setMenu(self.vm_menu(vm, more))
-        actions.addWidget(more)
-        row.addLayout(actions)
-        return card
+            card.launch.setToolTip("Open the QEMU desktop window. A running VM already has its own display window." if state == "running" else "Boot your Windows environment")
+        card.retry.setVisible(setup.get("state") == "error" or (setup_pending and state == "stopped" and not self.vm_active(vm)))
+        card.more.setAccessibleName("Manage " + vm.get("name", "Windows"))
+        old_menu = card.more.menu()
+        card.more.setMenu(self.vm_menu(vm, card.more))
+        if old_menu is not None:
+            old_menu.deleteLater()
 
-    def setup_indicator(self, vm):
+    def setup_indicator(self, vm, indicator=None):
         stages = ("Installing Windows", "Installing integration drivers",
                   "Installing Yttrium and Vulkan")
         setup = vm.get("setup", {})
@@ -325,54 +438,69 @@ class MainWindow(QMainWindow):
         paused = vm.get("state") == "paused"
         stopped = not self.vm_active(vm)
         attention = not complete and (failed or paused or stopped)
-        title = f"Step {phase + 1} of {len(stages)} · {stages[phase]}"
+        title = f"{phase + 1} / {len(stages)} · {stages[phase]}"
         message = str(setup.get("message") or "Windows Setup is running. Driver installation follows automatically; Windows may restart several times.")
         if complete:
-            title = "Setup complete · All 3 stages finished"
+            title = "Setup complete"
             message = "Windows is ready."
         elif failed:
-            title = "Setup needs attention"
+            title = "Setup failed"
         elif paused or stopped:
             title = "Setup paused" if paused else "Setup stopped"
             instruction = "Resume Windows to continue." if paused else "Use Retry automatic setup to continue."
             message = f"{instruction}\nLast update: {message}"
 
+        if indicator is None:
+            indicator = self._new_setup_indicator(vm)
+        heading = indicator.heading
+        heading.setText(title)
+        heading_style = "attention" if attention else "success" if complete else "muted"
+        if heading.objectName() != heading_style:
+            heading.setObjectName(heading_style)
+            heading.style().unpolish(heading)
+            heading.style().polish(heading)
+        heading.setToolTip(message)
+        heading.setAccessibleDescription(message)
+        progress = indicator.progress
+        if progress.property("attention") != attention:
+            progress.setProperty("attention", attention)
+            progress.style().unpolish(progress)
+            progress.style().polish(progress)
+        progress.setAccessibleDescription(title)
+        limits = (0, 0) if not complete and not attention and phase == 0 else (0, len(stages))
+        if (progress.minimum(), progress.maximum()) != limits:
+            progress.setRange(*limits)
+        if limits[1]:
+            progress.setValue(len(stages) if complete else phase)
+        indicator.failure_actions.setVisible(failed)
+        return indicator
+
+    def _new_setup_indicator(self, vm):
         indicator = QWidget()
         layout = QVBoxLayout(indicator)
         layout.setContentsMargins(0, 4, 0, 0)
         layout.setSpacing(6)
-        heading = label(title, "muted", True)
-        if complete or attention:
-            heading.setStyleSheet("color: #ffc08c;" if attention else "color: #80dfc8;")
-        layout.addWidget(heading)
-        progress = QProgressBar()
-        progress.setObjectName("setupProgress")
-        progress.setProperty("attention", attention)
-        progress.setAccessibleName("Windows setup progress")
-        progress.setAccessibleDescription(title)
-        progress.setTextVisible(False)
-        if not complete and not attention and phase == 0:
-            progress.setRange(0, 0)
-        else:
-            progress.setRange(0, len(stages))
-            progress.setValue(len(stages) if complete else phase)
-        progress.setToolTip("Stages: Windows installation → integration drivers → Yttrium and Vulkan")
-        layout.addWidget(progress)
-        details = label(message, "muted", True)
-        details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
-        layout.addWidget(details)
-        if failed:
-            buttons = QHBoxLayout()
-            buttons.setContentsMargins(0, 0, 0, 0)
-            copy_error = QPushButton("Copy error")
-            copy_error.setToolTip("Copy the setup error, graphics report and guest diagnostic logs.")
-            copy_error.clicked.connect(lambda: self.show_setup_diagnostics(vm, copy=True))
-            buttons.addWidget(copy_error)
-            view_details = QPushButton("View details")
-            view_details.clicked.connect(lambda: self.show_setup_diagnostics(vm))
-            buttons.addWidget(view_details)
-            buttons.addStretch()
-            layout.addLayout(buttons)
+        indicator.heading = ElidedLabel()
+        layout.addWidget(indicator.heading)
+        indicator.progress = QProgressBar()
+        indicator.progress.setObjectName("setupProgress")
+        indicator.progress.setAccessibleName("Windows setup progress")
+        indicator.progress.setTextVisible(False)
+        indicator.progress.setFixedHeight(6)
+        indicator.progress.setToolTip("Stages: Windows installation → integration drivers → Yttrium and Vulkan")
+        layout.addWidget(indicator.progress)
+        indicator.failure_actions = QWidget()
+        buttons = QHBoxLayout(indicator.failure_actions)
+        buttons.setContentsMargins(0, 0, 0, 0)
+        copy_error = QPushButton("Copy")
+        copy_error.setToolTip("Copy the setup error, graphics report and guest diagnostic logs.")
+        copy_error.clicked.connect(lambda: self.show_setup_diagnostics(vm, copy=True))
+        buttons.addWidget(copy_error)
+        view_details = QPushButton("Details")
+        view_details.clicked.connect(lambda: self.show_setup_diagnostics(vm))
+        buttons.addWidget(view_details)
+        buttons.addStretch()
+        layout.addWidget(indicator.failure_actions)
         return indicator
 
     def show_setup_diagnostics(self, vm, *, copy=False):
@@ -381,7 +509,7 @@ class MainWindow(QMainWindow):
                 QApplication.clipboard().setText(text)
                 self.statusBar().showMessage("Error and diagnostics copied.", 5000)
             else:
-                TextDialog("Windows setup details", text, self).exec()
+                TextDialog("Setup details", text, self).exec()
         self._perform("Reading Windows diagnostics…",
                       lambda: self.service.setup_diagnostics(vm["id"]), show,
                       refresh=False, allow_during_setup=True)
@@ -402,27 +530,27 @@ class MainWindow(QMainWindow):
             item.triggered.connect(callback)
             return item
 
-        action("Windows settings…", lambda: self.edit_vm(vm), offline_changes)
-        action("Shut down Windows", lambda: self.shutdown_vm(vm), active)
-        action("Restart Windows", lambda: self.restart_vm(vm), vm.get("state") == "running")
+        action("Settings…", lambda: self.edit_vm(vm), offline_changes)
+        action("Shut down", lambda: self.shutdown_vm(vm), active)
+        action("Restart…", lambda: self.restart_vm(vm), vm.get("state") == "running")
         if vm.get("state") == "paused":
-            action("Resume Windows", lambda: self.resume_vm(vm))
+            action("Resume", lambda: self.resume_vm(vm))
         else:
-            action("Pause Windows", lambda: self.pause_vm(vm), vm.get("state") == "running" and vm.get("active_graphics", vm.get("graphics")) != "yttrium")
-        action("Force power off…", lambda: self.force_stop_vm(vm), active)
+            action("Pause", lambda: self.pause_vm(vm), vm.get("state") == "running" and vm.get("active_graphics", vm.get("graphics")) != "yttrium")
+        action("Force stop…", lambda: self.force_stop_vm(vm), active)
         menu.addSeparator()
-        action("Create recovery checkpoint…", lambda: self.snapshot_vm(vm), offline_changes)
+        action("New checkpoint…", lambda: self.snapshot_vm(vm), offline_changes)
         action("Restore checkpoint…", lambda: self.restore_vm(vm), offline_changes)
         action("Expand disk…", lambda: self.expand_vm(vm), offline_changes)
-        action("Export full backup…", lambda: self.export_vm(vm), offline_changes)
+        action("Export backup…", lambda: self.export_vm(vm), offline_changes)
         menu.addSeparator()
-        action("Windows sign-in details…", lambda: self.show_windows_credentials(vm), bool(vm.get("auto_setup")))
-        action("Import guest GPU report…", lambda: self.import_report(vm), not self._installation_running())
-        action("Guest graphics setup guide", self.show_graphics_guide)
+        action("Sign-in…", lambda: self.show_windows_credentials(vm), bool(vm.get("auto_setup")))
+        action("Import GPU report…", lambda: self.import_report(vm), not self._installation_running())
+        action("Setup guide", self.show_graphics_guide)
         menu.addSeparator()
-        action("Open Windows folder", lambda: self._perform("Opening folder…", lambda: self.service.open_vm_folder(vm["id"]), refresh=False, allow_during_setup=True))
-        action("View runtime log…", lambda: self.show_log(vm))
-        action("Remove Windows from library…", lambda: self.delete_vm(vm), offline_changes)
+        action("Open folder", lambda: self._perform("Opening folder…", lambda: self.service.open_vm_folder(vm["id"]), refresh=False, allow_during_setup=True))
+        action("Runtime log…", lambda: self.show_log(vm))
+        action("Remove…", lambda: self.delete_vm(vm), offline_changes)
         return menu
 
     def create_vm(self):
@@ -433,7 +561,7 @@ class MainWindow(QMainWindow):
 
     def show_windows_credentials(self, vm):
         def show(details):
-            QMessageBox.information(self, "Windows sign-in", f"Username: {details['username']}\nPassword: {details['password']}")
+            QMessageBox.information(self, "Sign-in", f"Username: {details['username']}\nPassword: {details['password']}")
         self._perform("Reading Windows sign-in details…", lambda: self.service.windows_credentials(vm["id"]), show, refresh=False, allow_during_setup=True)
 
     def edit_vm(self, vm):
@@ -453,7 +581,7 @@ class MainWindow(QMainWindow):
         self._perform("Requesting a safe Windows shutdown…", lambda: self.service.shutdown_vm(vm["id"]), allow_during_setup=True)
 
     def restart_vm(self, vm):
-        if not self.confirm("Restart Windows?", "Windows will restart. Save your work in the guest first."):
+        if not self.confirm("Restart?", "Save your work in Windows before restarting."):
             return
         self._perform("Requesting a Windows restart…", lambda: self.service.restart_vm(vm["id"]), allow_during_setup=True)
 
@@ -464,18 +592,18 @@ class MainWindow(QMainWindow):
         self._perform("Resuming Windows…", lambda: self.service.resume_vm(vm["id"]), allow_during_setup=True)
 
     def force_stop_vm(self, vm):
-        if self.confirm("Force Windows to power off?", "This is like unplugging the power cable. Unsaved work will be lost and the Windows filesystem may need repair. Try Shut down Windows first.", danger=True):
+        if self.confirm("Force stop?", "Unsaved work will be lost. The Windows disk may need repair. Try Shut down first.", danger=True):
             self._perform("Forcing power off…", lambda: self.service.force_stop_vm(vm["id"]), allow_during_setup=True)
 
     def delete_vm(self, vm):
-        name, ok = QInputDialog.getText(self, "Remove Windows from library", f"This removes Windows from the library. Files and checkpoints are kept in the storage folder’s .trash directory for manual recovery.\nType the environment name to confirm: {vm['name']}")
+        name, ok = QInputDialog.getText(self, "Remove?", f"Files and checkpoints move to the storage folder’s .trash directory for recovery.\nType {vm['name']} to confirm:")
         if ok and name == vm["name"]:
             self._perform("Moving Windows to recoverable storage trash…", lambda: self.service.delete_vm(vm["id"]))
         elif ok:
             QMessageBox.information(self, "Name does not match", "Windows was kept. The confirmation must exactly match the environment name.")
 
     def snapshot_vm(self, vm):
-        name, ok = QInputDialog.getText(self, "Create recovery checkpoint", "Checkpoint name (letters, numbers, hyphens or underscores):")
+        name, ok = QInputDialog.getText(self, "New checkpoint", "Name (letters, numbers, - or _):")
         if ok and name.strip():
             self._perform("Saving the stopped disk, firmware and TPM state. This may take a while…", lambda: self.service.snapshot_vm(vm["id"], name.strip()))
 
@@ -485,24 +613,24 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "No recovery checkpoints", "Create a checkpoint while Windows is stopped first.")
                 return
             name, ok = QInputDialog.getItem(self, "Restore checkpoint", "Checkpoint", names, 0, False)
-            if ok and self.confirm("Replace Windows with this checkpoint?", "All changes made after the checkpoint will be replaced, including Windows files and TPM state. Export a full backup first if you need the current data.", danger=True):
+            if ok and self.confirm("Restore checkpoint?", "Replaces Windows files and TPM state. Changes since this checkpoint will be lost. Export a backup to keep them.", danger=True):
                 self._perform("Restoring Windows disk, firmware and TPM state…", lambda: self.service.restore_vm(vm["id"], name))
         self._perform("Reading recovery checkpoints…", lambda: self.service.list_snapshots(vm["id"]), choose, refresh=False)
 
     def expand_vm(self, vm):
-        size, ok = QInputDialog.getInt(self, "Expand Windows disk", "New maximum capacity in GiB (then grow the Windows partition in Disk Management):", int(vm["disk_gib"]) + 64, int(vm["disk_gib"]) + 1, 1048576)
+        size, ok = QInputDialog.getInt(self, "Expand disk", "New limit (GiB). Extend the partition in Windows Disk Management afterward:", int(vm["disk_gib"]) + 64, int(vm["disk_gib"]) + 1, 1048576)
         if ok:
             self._perform("Expanding the virtual disk…", lambda: self.service.expand_vm(vm["id"], size))
 
     def export_vm(self, vm):
-        path, _ = QFileDialog.getSaveFileName(self, "Export complete Windows backup", vm.get("name", "Windows") + ".virtue", "Virtue full VM backup (*.virtue)")
+        path, _ = QFileDialog.getSaveFileName(self, "Export backup", vm.get("name", "Windows") + ".virtue", "VM backup (*.virtue)")
         if path:
             if not path.lower().endswith(".virtue"):
                 path += ".virtue"
             self._perform("Exporting the stopped Windows disk, configuration, firmware and TPM. This may take a while…", lambda: self.service.export_vm(vm["id"], path), lambda _: QMessageBox.information(self, "Backup exported", f"The full Windows backup was saved to:\n{path}"))
 
     def import_vm(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import complete Windows backup", "", "Virtue full VM backup (*.virtue)")
+        path, _ = QFileDialog.getOpenFileName(self, "Import backup", "", "VM backup (*.virtue)")
         if path:
             self._perform("Validating and importing the Windows backup…", lambda: self.service.import_vm(path))
 
@@ -530,11 +658,19 @@ class MainWindow(QMainWindow):
         def show(result):
             self.host = result
             self.render_host()
-            TextDialog("Host & diagnostics", diagnostics_html(result, self.vms), self, rich=True).exec()
+            TextDialog("Diagnostics", diagnostics_html(result, self.vms), self, rich=True).exec()
         self._perform("Refreshing host and graphics diagnostics…", self.service.host_report, show, refresh=False, allow_during_setup=True)
 
     def show_graphics_guide(self):
-        TextDialog("Automatic Windows setup", GRAPHICS_GUIDE, self, rich=True).exec()
+        TextDialog("Setup", GRAPHICS_GUIDE, self, rich=True).exec()
+
+    def show_display_guide(self):
+        TextDialog("Display", "Ctrl+Alt+M    Show / hide controls\n"
+                   "Ctrl+Alt+F    Fullscreen\n"
+                   "Ctrl+Alt+G    Release input\n\n"
+                   "If a shortcut does not respond, show controls first.\n"
+                   "View → Zoom To Fit scales Windows to the window.\n"
+                   "Use Shut down in the library to stop Windows safely.", self).exec()
 
     @staticmethod
     def support_folder(name):
@@ -549,7 +685,7 @@ class MainWindow(QMainWindow):
     def open_support_folder(self, name):
         folder = self.support_folder(name)
         if folder is None:
-            QMessageBox.information(self, "Support files unavailable", "Install the complete Virtue package or open the docs and guest directories in the source checkout.")
+            QMessageBox.information(self, "Guides unavailable", "Reinstall the app or open docs in the source folder.")
         elif not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
             QMessageBox.information(self, "Open support folder", f"Open this folder in your file manager:\n{folder}")
 
@@ -558,15 +694,17 @@ class MainWindow(QMainWindow):
         box = QMessageBox(icon, title, detail, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, self)
         box.setDefaultButton(QMessageBox.StandardButton.Cancel)
         box.button(QMessageBox.StandardButton.Yes).setText("Continue")
+        if danger:
+            box.button(QMessageBox.StandardButton.Yes).setObjectName("danger")
         return box.exec() == QMessageBox.StandardButton.Yes
 
     def closeEvent(self, event):
         if self.tasks.busy:
-            QMessageBox.information(self, "An operation is in progress", "Wait for the current disk or VM operation to finish before closing Virtue.")
+            QMessageBox.information(self, "Operation in progress", "Wait for the current operation to finish.")
             event.ignore()
             return
         active = any(self.vm_active(vm) for vm in self.vms)
-        if active and not self.confirm("Leave Windows running?", "Closing Virtue leaves your Windows desktop and VM running. You can reopen Virtue to manage it. To stop Windows, choose Shut down Windows first."):
+        if active and not self.confirm("Leave Windows running?", "Windows keeps running after this window closes. To stop it, choose Shut down first."):
             event.ignore()
             return
         self.timer.stop()

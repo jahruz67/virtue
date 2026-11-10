@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Windows · Preview</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22128%22%20height%3D%22128%22%20viewBox%3D%220%200%20128%20128%22%3E%0D%0A%20%3Crect%20x%3D%224%22%20y%3D%224%22%20width%3D%22120%22%20height%3D%22120%22%20rx%3D%2228%22%20fill%3D%22%23245edb%22%2F%3E%0D%0A%20%3Crect%20x%3D%2225%22%20y%3D%2236%22%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%228%22%20fill%3D%22%23a6c5ff%22%2F%3E%0D%0A%20%3Crect%20x%3D%2239%22%20y%3D%2224%22%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%228%22%20fill%3D%22%23ffffff%22%2F%3E%0D%0A%20%3Cpath%20d%3D%22M39%2041h64%22%20stroke%3D%22%23c8dafb%22%20stroke-width%3D%222%22%2F%3E%0D%0A%20%3Cg%20fill%3D%22%23245edb%22%3E%0D%0A%20%20%3Ccircle%20cx%3D%2249%22%20cy%3D%2232%22%20r%3D%222%22%2F%3E%3Ccircle%20cx%3D%2257%22%20cy%3D%2232%22%20r%3D%222%22%2F%3E%0D%0A%20%20%3Crect%20x%3D%2255%22%20y%3D%2252%22%20width%3D%2212%22%20height%3D%2212%22%20rx%3D%221%22%2F%3E%3Crect%20x%3D%2271%22%20y%3D%2252%22%20width%3D%2212%22%20height%3D%2212%22%20rx%3D%221%22%2F%3E%0D%0A%20%20%3Crect%20x%3D%2255%22%20y%3D%2268%22%20width%3D%2212%22%20height%3D%2212%22%20rx%3D%221%22%2F%3E%3Crect%20x%3D%2271%22%20y%3D%2268%22%20width%3D%2212%22%20height%3D%2212%22%20rx%3D%221%22%2F%3E%0D%0A%20%3C%2Fg%3E%0D%0A%3C%2Fsvg%3E">
+<style>
+:root{color-scheme:light;--bg:#f5f6f8;--card:#fff;--line:#dce1e8;--text:#202631;--muted:#5c6676;--blue:#245edb;--mint:#14724d;--amber:#965a10}
+*{box-sizing:border-box}
+body{margin:0;background:#e9edf2;color:var(--text);font:14px 'Segoe UI','Noto Sans',sans-serif}
+button,input,select,textarea{font:inherit}
+button,select{cursor:pointer}
+button{background:#fff;border:1px solid #b8c2cf;color:var(--text);padding:8px 13px;border-radius:6px;font-weight:600;white-space:nowrap}
+button:hover{background:#f0f3f8;border-color:#8d9bad}
+button:active{background:#e5ebf4}
+button:disabled{background:#f0f2f5;color:#8b95a4;border-color:var(--line);cursor:default}
+button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+button.primary:hover{background:#1d4fc0;border-color:#1d4fc0}
+button.primary:disabled{background:#e4eaf6;color:#8999bb;border-color:#d5def0}
+button.danger{color:#b42332;border-color:#d98b94}
+button.danger:hover{background:#fff0f1}
+button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--blue);outline-offset:3px}
+input,select,textarea{background:#fff;border:1px solid #b8c2cf;border-radius:6px;padding:8px;color:var(--text);min-width:0}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
+input:disabled,select:disabled{background:#eef0f4;color:#7a8697}
+input::placeholder{color:#677387}
+input[type=checkbox]{accent-color:var(--blue);width:17px;height:17px}
+p{line-height:1.6;margin:0 0 15px}
+h1,h2,h3{margin:0}
+h2{font-size:20px;font-weight:600}
+h3{font-size:17px;margin:20px 0 10px}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+.mint{color:var(--mint)}
+.amber{color:var(--amber)}
+.preview-bar{max-width:1060px;margin:auto;padding:24px 0 20px;display:flex;align-items:center;justify-content:flex-end;gap:16px}
+.preview-control{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:11px;min-width:0}
+.preview-control select{font-size:12px;max-width:265px}
+.shell{width:calc(100% - 40px);max-width:1060px;min-width:min(420px,calc(100vw - 20px));height:min(644px,calc(100dvh - 120px));min-height:320px;margin:0 auto 24px;border:1px solid #c6ced9;border-radius:10px;overflow:hidden;resize:both;display:flex;flex-direction:column;container:app / inline-size;box-shadow:0 18px 56px #26364c16}
+.titlebar{display:flex;flex-shrink:0;justify-content:space-between;align-items:center;background:#f8f9fb;padding:9px 14px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line)}
+.window-tools{display:flex;align-items:center;gap:7px}
+.window-tools button{padding:0;width:26px;height:24px;border:0;background:transparent;font-weight:400}
+.app{background:var(--bg);min-height:0;flex:1;display:flex;flex-direction:column;overflow:hidden}
+.header{display:flex;flex-shrink:0;align-items:center;gap:10px;padding:16px 24px;background:#fff;border-bottom:1px solid var(--line)}
+.spacer{flex:1}
+[hidden]{display:none!important}
+.status:empty{display:none}
+.icon-button{display:grid;place-items:center;min-width:36px;height:36px;padding:6px}
+.action-icon{width:18px;height:18px;display:inline-block;vertical-align:middle;flex-shrink:0;pointer-events:none}
+.window-caption{display:flex;align-items:center;gap:8px}
+.window-caption .action-icon{width:16px;height:16px}
+.window-tools .action-icon{width:13px;height:13px}
+.dialog-title button .action-icon{width:16px;height:16px}
+.actions{min-width:88px}
+.banner{background:#edf8f1;border:1px solid #cde5d6;color:#23613f;border-radius:8px;padding:12px 16px;display:flex;flex-shrink:0;gap:16px;align-items:center;line-height:1.5;margin:24px 28px 0;overflow-wrap:anywhere}
+.banner>span{flex:1}
+.banner.warning{background:#fff6e7;border-color:#e9c98a;color:#805013}
+.cards{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:12px;padding:24px 28px;scrollbar-gutter:stable}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 20px;display:flex;flex-shrink:0;align-items:center;gap:20px}
+.tile{flex-shrink:0;width:144px;height:90px;border-radius:8px;overflow:hidden}
+.tile svg,.empty-artwork svg{display:block;width:144px;height:90px}
+.vm-content{flex:1;min-width:0;overflow-wrap:anywhere}
+.vm-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:7px}
+.vm-title{font-size:20px;font-weight:600;overflow-wrap:anywhere}
+.state{color:#526071;background:#edf0f4;border-radius:10px;padding:4px 9px;white-space:nowrap;font-weight:400;font-size:12px}
+.state.mint{color:#14724d;background:#edf8f1}
+.vm-content>.muted{margin-top:7px;line-height:1.5}
+.actions{display:flex;flex-direction:column;gap:8px;align-self:center}
+.actions>button{width:100%}
+.empty{padding:48px 30px;text-align:center;display:block}
+.empty-artwork{display:flex;justify-content:center;margin-bottom:22px}
+.empty h2{margin-bottom:14px}
+.empty p:last-child{margin-bottom:0}
+.status{background:var(--bg);border-top:1px solid #e3e7ed;padding:8px 14px;color:var(--muted);font-size:12px;min-height:32px;flex-shrink:0;max-height:80px;overflow:auto;overflow-wrap:anywhere}
+.progress{height:6px;background:#e5ebf4;border-radius:3px;overflow:hidden;margin:8px 0}
+.progress div{height:100%;background:var(--blue);border-radius:3px}
+.progress.attention div{background:#b57318}
+.setup{margin-top:14px}
+.setup p{margin:6px 0 0;line-height:1.5}
+.setup-buttons{display:flex;gap:8px;margin-top:10px}
+.setup-buttons button{font-size:12px;padding:6px 10px}
+.popup{position:fixed;z-index:20;background:#fff;border:1px solid #c6ced9;padding:6px;border-radius:7px;box-shadow:0 10px 28px #25354c26;min-width:260px;max-height:calc(100vh - 24px);overflow:auto}
+.popup[hidden]{display:none}
+.popup button{display:block;background:transparent;border:0;border-radius:4px;text-align:left;width:100%;padding:8px 22px;font-weight:400}
+.popup button:hover:not(:disabled){background:#e8efff;color:#1949b2}
+.popup button:disabled{color:#8b95a4}
+.popup hr{border:0;border-top:1px solid #e3e7ed;margin:6px 12px}
+dialog{padding:0;border:1px solid #c6ced9;border-radius:10px;background:var(--bg);color:var(--text);width:660px;max-width:calc(100vw - 24px);max-height:calc(100vh - 40px);box-shadow:0 25px 80px #172b4a33}
+dialog::backdrop{background:#1c2b4352}
+dialog.wide{width:780px}
+.dialog-title{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:#f8f9fb;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.dialog-title button{border:0;padding:0 5px;background:transparent;font-size:20px;font-weight:400}
+.dialog-body{padding:24px;overflow:auto;max-height:calc(100vh - 150px)}
+.dialog-body>h2{margin-bottom:12px}
+.dialog-footer{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;padding:0 24px 24px}
+.tabs{display:flex;overflow-x:auto;margin-top:20px}
+.tabs button{border-radius:6px 6px 0 0;border:0;border-bottom:2px solid transparent;background:#edf0f4;color:var(--muted);padding:11px 18px;font-weight:400}
+.tabs button[aria-selected=true]{color:#1949b2;background:#fff;border-bottom-color:var(--blue)}
+.tab-panel{background:#fff;border:1px solid var(--line);border-radius:0 8px 8px;padding:20px;min-height:285px}
+.tab-panel[hidden]{display:none}
+.form-row{display:grid;grid-template-columns:150px 1fr;gap:14px;align-items:center;margin-bottom:14px}
+.form-row>label{line-height:1.5}
+.file-field{display:flex;gap:8px;align-items:center}
+.file-field input{width:100%}
+.form-note{color:var(--muted);line-height:1.6}
+.check{display:flex;gap:9px;align-items:center;margin:16px 0}
+.dialog-body .form-note:last-child{margin-bottom:0}
+.error{color:#b42332;margin:16px 0 0}
+.text-panel{background:#fff;border:1px solid #b8c2cf;border-radius:6px;padding:18px;min-height:310px;overflow-wrap:anywhere;line-height:1.65}
+.text-panel h2{margin:0 0 12px}
+.text-panel p:last-child{margin-bottom:0}
+pre{margin:0;white-space:pre-wrap;font:13px/1.75 Consolas,monospace;color:#3c4a5f}
+.dialog-field{display:flex;flex-direction:column;gap:10px}
+.dialog-field input,.dialog-field select{width:100%}
+.file-list{background:#fff;border:1px solid var(--line);border-radius:6px;padding:8px;margin:14px 0 18px}
+.file-list div{padding:9px 12px;border-radius:4px}
+.file-list .selected{background:#e8efff;color:#1949b2}
+.file-head{display:flex;justify-content:space-between;border-bottom:1px solid var(--line);color:var(--muted);font-size:12px}
+.notice{color:var(--muted);font-size:12px;line-height:1.5;margin:12px 0 0}
+.checkline{margin:14px 0}
+.checkline b{display:block}
+.busy-bar{height:5px;background:#e5ebf4;margin-top:12px}
+.busy-bar:after{content:'';display:block;width:40%;height:5px;background:var(--blue)}
+.guest-display{flex:1;min-height:0;background:#11151b;overflow:hidden}
+.guest-display svg{display:block;width:100%;height:100%}
+.vm-menubar{display:flex;gap:4px;padding:2px 6px;background:#fff;border-bottom:1px solid var(--line);flex-shrink:0}
+.vm-menubar button{border:0;background:transparent;font-weight:400;padding:6px 12px}
+.vm-menubar button:hover{background:#e8efff;color:#1949b2}
+@media(max-width:1100px){.preview-bar{margin-left:20px;margin-right:20px}.shell{margin-left:20px;margin-right:20px}}
+@container app (max-width:620px){.card:not(.empty){flex-direction:column;align-items:stretch;padding:16px;gap:14px}.tile{display:none}.vm-content{flex:auto;width:100%}.actions{flex-direction:row;align-self:stretch;min-width:0}.actions>button{width:auto;flex:1;min-width:0}.actions>.icon-button{flex:0 0 36px}}
+@media(max-width:760px){.preview-bar{flex-wrap:wrap;gap:12px}.preview-control{flex:1 1 160px}.preview-control select{width:100%}.form-row{grid-template-columns:1fr;gap:6px}.tabs button{padding:10px;font-size:12px}.tab-panel{padding:16px}.titlebar{font-size:11px}.dialog-body{padding:18px}.shell{width:calc(100% - 20px);margin-left:10px;margin-right:10px}}
+@media print{.preview-bar,.window-tools{display:none}.shell{height:auto;min-width:0;margin:0;max-width:none;resize:none;box-shadow:none;container-type:normal}.app{min-height:700px;overflow:visible}.cards{overflow:visible}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true"><defs>
+<symbol id="icon-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M12 17v4m-4 0h8"/></symbol>
+<symbol id="icon-add" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="icon-import" viewBox="0 0 24 24"><path d="M4 14v6h16v-6M12 3v11m-4-4 4 4 4-4"/></symbol>
+<symbol id="icon-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v11H3z"/></symbol>
+<symbol id="icon-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.2 8.5C9.5 5.8 15.5 6 15 9.5 14.8 11.5 12 11.5 12 14"/><circle cx="12" cy="17" r=".9" fill="currentColor" stroke="none"/></symbol>
+<symbol id="icon-more" viewBox="0 0 24 24"><g fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></g></symbol>
+<symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+<symbol id="icon-minimize" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+<symbol id="icon-maximize" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/></symbol>
+<symbol id="icon-app" viewBox="0 0 128 128"><g stroke="none"><rect x="4" y="4" width="120" height="120" rx="28" fill="#245edb"/>
+ <rect x="25" y="36" width="64" height="64" rx="8" fill="#a6c5ff"/>
+ <rect x="39" y="24" width="64" height="64" rx="8" fill="#ffffff"/>
+ <path d="M39 41h64" stroke="#c8dafb" stroke-width="2"/>
+ <g fill="#245edb">
+  <circle cx="49" cy="32" r="2"/><circle cx="57" cy="32" r="2"/>
+  <rect x="55" y="52" width="12" height="12" rx="1"/><rect x="71" y="52" width="12" height="12" rx="1"/>
+  <rect x="55" y="68" width="12" height="12" rx="1"/><rect x="71" y="68" width="12" height="12" rx="1"/>
+ </g></g></symbol>
+</defs></svg>
+<div class="preview-bar" aria-label="Preview controls">
+  <label class="preview-control">State<select id="workspace-state">
+    <option value="ready">Ready</option><option value="empty">Empty library</option><option value="running">Running</option><option value="starting">Starting</option><option value="shutdown">Shutting down</option><option value="paused">Paused</option><option value="install0">Setup · Installing Windows</option><option value="install1">Setup · Integration drivers</option><option value="install2">Setup · Yttrium and Vulkan</option><option value="complete">Setup complete</option><option value="stopped">Setup stopped</option><option value="setupPaused">Setup paused</option><option value="failed">Setup needs attention</option><option value="safe">Compatible display · safe launch</option><option value="legacy">Windows 10 · compatible display</option><option value="host">Host needs attention</option><option value="checking">Checking host</option><option value="busy">Operation in progress</option>
+  </select></label>
+  <label class="preview-control">Screen<select id="screen-picker">
+    <option value="">Workspace</option>
+    <optgroup label="Display"><option value="vm-window">VM window</option><option value="vm-controls">VM window · Controls</option><option value="display-help">Display shortcuts</option></optgroup>
+    <optgroup label="Create & settings"><option value="create">New · General</option><option value="create-resources">New · Resources</option><option value="create-features">New · Features</option><option value="create-error">New · Error</option><option value="settings">Settings · General</option><option value="settings-resources">Settings · Resources</option><option value="settings-features">Settings · Features</option><option value="media">Choose installation media</option></optgroup>
+    <optgroup label="Menus"><option value="manage">Actions</option><option value="help">Help</option></optgroup>
+    <optgroup label="Information"><option value="diagnostics">Diagnostics</option><option value="guide">Setup</option><option value="details">Setup details</option><option value="log">Windows CAD · runtime log</option><option value="credentials">Sign-in</option><option value="verification">Guest graphics verification</option><option value="folder">Open Windows folder</option><option value="support">Open setup guides</option></optgroup>
+    <optgroup label="Recovery & backup"><option value="checkpoint">New checkpoint</option><option value="restore">Restore checkpoint</option><option value="restore-confirm">Replace Windows with checkpoint?</option><option value="no-checkpoints">No recovery checkpoints</option><option value="expand">Expand disk</option><option value="export">Export backup</option><option value="exported">Backup exported</option><option value="import">Import backup</option><option value="gpu-report">Import guest GPU report</option></optgroup>
+    <optgroup label="Confirmations & messages"><option value="restart">Restart?</option><option value="force">Force stop?</option><option value="remove">Remove</option><option value="name-mismatch">Name does not match</option><option value="error">Unable to complete action</option><option value="in-progress">Operation in progress</option><option value="leave">Leave Running?</option><option value="unavailable">Support files unavailable</option></optgroup>
+  </select></label>
+</div>
+<main class="shell" id="library-window">
+  <div class="titlebar"><span class="window-caption"><svg class="action-icon" viewBox="0 0 128 128" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-app"/></svg>Windows</span><div class="window-tools"><span aria-hidden="true"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-minimize"/></svg></span><span aria-hidden="true"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-maximize"/></svg></span><button data-screen="leave" aria-label="Preview close confirmation"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-close"/></svg></button></div></div>
+  <div class="app">
+    <header class="header"><button class="icon-button" id="diagnostics-button" data-screen="diagnostics" title="Host diagnostics" aria-label="Host diagnostics"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-monitor"/></svg></button><div class="spacer"></div><button class="icon-button" id="import-button" data-screen="import" title="Import Windows backup" aria-label="Import Windows backup"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-import"/></svg></button><button class="icon-button" id="create-button" data-screen="create" title="Create Windows" aria-label="Create Windows"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-add"/></svg></button><button class="icon-button" id="help-button" aria-haspopup="menu" aria-expanded="false" title="Help" aria-label="Help"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-help"/></svg></button></header>
+    <div class="banner" id="banner"></div>
+    <section class="cards" id="cards" aria-label="Windows environments"></section>
+  </div>
+  <div class="status" id="status" role="status"></div>
+</main>
+<section class="shell" id="vm-window" aria-label="Illustrative VM window; desktop decorations may differ" hidden>
+  <div class="titlebar"><span>QEMU (Windows CAD)</span><div class="window-tools"><span aria-hidden="true"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-minimize"/></svg></span><span aria-hidden="true"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-maximize"/></svg></span><button data-screen="" aria-label="Return to library preview"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-close"/></svg></button></div></div>
+  <div class="vm-menubar" id="vm-controls" hidden><button data-vm-menu="machine" aria-haspopup="menu">Machine</button><button data-vm-menu="view" aria-haspopup="menu">View</button></div>
+  <div class="guest-display" aria-label="Sample Windows wallpaper, not a running guest">
+    <svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs><linearGradient id="guest-blue" x2="1" y2="1"><stop stop-color="#183b91"/><stop offset="1" stop-color="#498af0"/></linearGradient></defs>
+      <rect width="1600" height="900" fill="url(#guest-blue)"/>
+      <ellipse cx="550" cy="950" rx="920" ry="650" fill="#3579e6"/>
+      <ellipse cx="1390" cy="25" rx="800" ry="695" fill="#65a5fa"/>
+      <ellipse cx="1415" cy="40" rx="665" ry="570" fill="#2863cf"/>
+      <g fill="#fff"><path d="M714 364h76v76h-76zM810 364h76v76h-76zM714 460h76v76h-76zM810 460h76v76h-76z"/></g>
+      <rect y="852" width="1600" height="48" fill="#f1f5ff" fill-opacity=".95"/>
+      <g fill="#245edb"><path d="M729 866h10v10h-10zM742 866h10v10h-10zM729 879h10v10h-10zM742 879h10v10h-10z"/></g>
+      <path d="M830 870h24v18h-24zM830 866h10l4 4h-14z" fill="#e4b343"/>
+      <circle cx="1480" cy="876" r="3" fill="#5c6676"/><circle cx="1500" cy="876" r="3" fill="#5c6676"/>
+    </svg>
+  </div>
+</section>
+<div id="popup" class="popup" role="menu" hidden></div>
+<dialog id="modal" aria-labelledby="modal-title"><div class="dialog-title"><span id="modal-title"></span><button id="close-dialog" aria-label="Close dialog"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-close"/></svg></button></div><div class="dialog-body" id="modal-body"></div><div class="dialog-footer" id="modal-footer"></div></dialog>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const modal = $('modal'), popup = $('popup');
+let state = 'ready', returnTo = '', menuAnchor = null;
+const esc = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const button = (text,screen,css='') => `<button class="${css}" data-screen="${screen}">${text}</button>`;
+const artwork = '<svg viewBox="0 0 288 180" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs><linearGradient id="desktop-blue" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#183b91"/><stop offset="1" stop-color="#498af0"/></linearGradient><clipPath id="desktop-clip"><rect width="288" height="180" rx="16"/></clipPath></defs><g clip-path="url(#desktop-clip)"><rect width="288" height="180" fill="url(#desktop-blue)"/><ellipse cx="100" cy="180" rx="165" ry="110" fill="#3579e6"/><ellipse cx="250" cy="5" rx="145" ry="125" fill="#65a5fa"/><ellipse cx="255" cy="7.5" rx="120" ry="102.5" fill="#2863cf"/><path fill="#fff" d="M123 69h19v19h-19zM146 69h19v19h-19zM123 92h19v19h-19zM146 92h19v19h-19z"/></g></svg>';
+const runningStates = ['running','safe','install0','install1','install2','starting','shutdown'];
+const installationRunning = () => ['install0','install1','install2','starting','shutdown'].includes(state);
+const isActive = () => runningStates.includes(state) || ['paused','setupPaused'].includes(state);
+const isLegacy = () => state === 'legacy';
+function closeMenu(){popup.hidden=true;if(menuAnchor)menuAnchor.setAttribute('aria-expanded','false');menuAnchor=null;}
+function closeDialog(){modal.close();$('screen-picker').value='';returnTo='';}
+function renderWorkspace(){
+  closeMenu();
+  $('library-window').hidden=false;$('vm-window').hidden=true;
+  const hostBad = state === 'host', busy = state === 'busy', checking = state === 'checking';
+  $('banner').className = 'banner' + (hostBad ? ' warning' : '');
+  $('banner').hidden = !hostBad && !checking && !busy;
+  $('banner').innerHTML = hostBad ? '<span>Setup required: KVM permissions, Yttrium runtime.</span><button data-preview="Repairing setup…">Repair</button>' : `<span>${checking ? 'Checking host…' : busy ? 'Preparing components…' : ''}</span>`;
+  const empty = ['empty','checking'].includes(state);
+  $('create-button').classList.toggle('primary', empty);
+  $('create-button').disabled = hostBad || busy || checking || installationRunning();
+  $('import-button').disabled = busy || installationRunning();
+  $('diagnostics-button').disabled = busy;
+  $('status').textContent = '';
+  if(['empty','checking'].includes(state)){
+    $('cards').innerHTML = `<div class="card empty"><div class="empty-artwork">${artwork}</div><h2>No Windows environments</h2><p class="muted">Select + to add Windows.</p></div>`;return;
+  }
+  let vmState = isActive() ? (state === 'paused' || state === 'setupPaused' ? 'Paused' : state === 'starting' ? 'Starting' : state === 'shutdown' ? 'Shutdown' : 'Running') : 'Stopped';
+  let graphics = isLegacy() ? 'Compatible display' : state === 'safe' ? 'Compatible display (safe launch)' : 'Yttrium graphics';
+  const pending = ['install0','install1','install2','failed','stopped','setupPaused'].includes(state);
+  let setup = '';
+  if(pending){
+    const phase = state === 'install0' ? 0 : state === 'install1' ? 1 : 2;
+    const attention = ['failed','stopped','setupPaused'].includes(state);
+    const complete = state === 'complete';
+    const title = complete ? 'Setup complete' : state === 'failed' ? 'Setup failed' : state === 'stopped' ? 'Setup stopped' : state === 'setupPaused' ? 'Setup paused' : `${phase+1} / 3 · ${['Installing Windows','Installing integration drivers','Installing Yttrium and Vulkan'][phase]}`;
+    const message = complete ? 'Windows is ready.' : state === 'failed' ? 'Hardware rendering check failed. A verified guest acceleration report was not received.' : state === 'stopped' ? 'Use Retry automatic setup to continue. Last update: Installing Yttrium and Vulkan.' : state === 'setupPaused' ? 'Resume Windows to continue. Last update: Installing Yttrium and Vulkan.' : phase === 0 ? 'Windows Setup is running. Driver installation follows automatically; Windows may restart several times.' : phase === 1 ? 'Installing integration drivers. Windows may restart automatically.' : 'Installing Yttrium graphics and Vulkan runtime. Checking hardware rendering before completion.';
+    setup = `<div class="setup"><div class="${attention?'amber':complete?'mint':'muted'}" title="${esc(message)}">${title}</div><div class="progress ${attention?'attention':''}" role="progressbar" aria-label="Windows setup progress" aria-valuemin="0" aria-valuemax="3" aria-valuenow="${complete?3:phase}"><div style="width:${complete?100:phase===0?28:phase/3*100}%"></div></div>${state==='failed'?'<div class="setup-buttons"><button data-preview="Error and diagnostics copied. (Preview only)">Copy</button><button data-screen="details">Details</button></div>':''}</div>`;
+  }
+  const paused = ['paused','setupPaused'].includes(state);
+  const disabled = !paused && (isActive() || pending || hostBad || busy);
+  $('cards').innerHTML = `<article class="card"><div class="tile" aria-hidden="true">${artwork}</div><div class="vm-content"><div class="vm-top"><span class="vm-title">${isLegacy()?'Windows Legacy':'Windows CAD'}</span><span class="state ${vmState==='Running'?'mint':''}">${vmState}</span></div><div class="muted" title="Disk: 32.4 / 128 GiB · ${graphics}">Windows ${isLegacy()?'10':'11'} &nbsp;·&nbsp; 8 GiB &nbsp;·&nbsp; 4 CPUs</div>${setup}</div><div class="actions"><button class="primary" data-preview="${paused?'Resuming':'Starting'} Windows in its desktop window…" ${disabled?'disabled':''}>${paused?'Resume':'Start'}</button>${['failed','stopped'].includes(state)?'<button data-preview="Retrying automatic Windows setup…" title="Retry automatic setup">Retry</button>':''}<button class="icon-button" id="manage-button" title="Manage Windows" aria-label="Manage Windows CAD" aria-haspopup="menu" aria-expanded="false" ${busy?'disabled':''}><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-more"/></svg></button></div></article>${busy?'<div class="busy-bar" aria-label="Operation in progress"></div>':''}`;
+}
+const manageItems = () => {
+  const active = isActive(), offline = !active && !installationRunning();
+  return [
+    ['Settings…','settings',offline],['Shut down','shutdown-action',active],['Restart…','restart',state==='running'||state==='safe'],
+    [['paused','setupPaused'].includes(state)?'Resume':'Pause','pause-action',['paused','setupPaused'].includes(state)||(state==='legacy'&&active)],['Force stop…','force',active],null,
+    ['New checkpoint…','checkpoint',offline],['Restore checkpoint…','restore',offline],['Expand disk…','expand',offline],['Export backup…','export',offline],null,
+    ['Sign-in…','credentials',!isLegacy()],['Import GPU report…','gpu-report',!installationRunning()],['Setup guide','guide',true],null,
+    ['Open folder','folder',true],['Runtime log…','log',true],['Remove…','remove',offline]
+  ];
+};
+function showMenu(kind,anchor){
+  closeMenu();menuAnchor=anchor;anchor.setAttribute('aria-expanded','true');
+  const items = kind === 'help' ? [['Setup guide','guide',true],['Display shortcuts','display-help',true],['Open guides','support',true]] : kind === 'vm-machine' ? [['Pause','pause-action',true],['Reset','restart',true],['Power Down','shutdown-action',true]] : kind === 'vm-view' ? [['Fullscreen · Ctrl+Alt+F','display-help',true],['Zoom To Fit','display-help',true],['Grab Input · Ctrl+Alt+G','display-help',true],['Show Menubar · Ctrl+Alt+M','vm-window',true]] : manageItems();
+  popup.innerHTML = items.map(item=>item?`<button role="menuitem" data-screen="${item[1]}" ${item[2]?'':'disabled'}>${item[0]}</button>`:'<hr role="separator">').join('');
+  popup.hidden=false;
+  const r=anchor.getBoundingClientRect();
+  popup.style.left=Math.max(12,Math.min(r.right-popup.offsetWidth,innerWidth-popup.offsetWidth-12))+'px';
+  popup.style.top=Math.max(12,Math.min(r.bottom+6,innerHeight-popup.offsetHeight-12))+'px';
+  const first=popup.querySelector('button:not(:disabled)');if(first)first.focus();
+}
+function dialog(title,body,actions,wide=false){
+  closeMenu();$('modal-title').textContent=title;$('modal-body').innerHTML=body;$('modal-footer').innerHTML=actions||'<button data-close>Close</button>';modal.classList.toggle('wide',wide);if(!modal.open)modal.showModal();
+}
+function textDialog(title,body,plain=false){dialog(title,`<div class="text-panel">${plain?`<pre>${esc(body)}</pre>`:body}</div>`,null,true);}
+function showTab(tab){
+  modal.querySelectorAll('[data-tab]').forEach(b=>{const on=b.dataset.tab===tab;b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;});
+  modal.querySelectorAll('[data-panel]').forEach(p=>p.hidden=p.dataset.panel!==tab);
+}
+function showVMDialog(edit=false,tab='media',error=false){
+  const legacy=isLegacy();
+  dialog(edit?'Settings':'New Windows',`
+    <div class="tabs" role="tablist" aria-label="Windows settings tabs"><button id="tab-media" role="tab" aria-controls="panel-media" data-tab="media">General</button><button id="tab-resources" role="tab" aria-controls="panel-resources" data-tab="resources">Resources</button><button id="tab-features" role="tab" aria-controls="panel-features" data-tab="features">Features</button></div>
+    <div class="tab-panel" id="panel-media" role="tabpanel" aria-labelledby="tab-media" data-panel="media">
+      <div class="form-row"><label for="vm-name">Name</label><input id="vm-name" maxlength="80" value="${edit?(legacy?'Windows Legacy':'Windows CAD'):'Windows'}"></div>
+      ${edit?`<div class="form-row"><label for="vm-version">Version</label><select id="vm-version" disabled><option>Windows ${legacy?'10 x64 · legacy':'11 x64'}</option></select></div>`:''}
+      <div class="form-row"><label for="vm-iso">Windows ISO</label><div class="file-field"><input id="vm-iso" placeholder="Select ISO…" value="${edit?'/home/demo/Downloads/Windows11.iso':''}"><button data-browse="iso" title="Choose Windows ISO" aria-label="Choose Windows ISO"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-folder"/></svg></button></div></div>
+      ${edit?'<div class="form-row"><label for="vm-drivers">Drivers ISO</label><div class="file-field"><input id="vm-drivers" placeholder="Select ISO…"><button data-browse="drivers" title="Choose drivers ISO" aria-label="Choose drivers ISO"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-folder"/></svg></button></div></div>':''}
+      <p class="form-note">Windows ISO and license required. Creating Windows accepts the ISO’s license terms.</p>
+      ${edit&&legacy?'<label class="check"><input type="checkbox" checked>Installation complete</label><p class="form-note">Windows 10 is legacy. Windows 11 recommended.</p>':''}
+    </div>
+    <div class="tab-panel" id="panel-resources" role="tabpanel" aria-labelledby="tab-resources" data-panel="resources" hidden>
+      <div class="form-row"><label for="preset">Preset</label><select id="preset"><option>Light</option><option>Balanced</option><option>High Performance</option><option>CAD / Engineering</option><option selected>Custom</option></select></div>
+      <div class="form-row"><label for="memory">Memory</label><div class="file-field"><input id="memory" type="number" min="4" max="1048576" value="8" aria-label="Memory in GiB"><span class="muted">GiB</span></div></div>
+      <div class="form-row"><label for="cpus">CPUs</label><div class="file-field"><input id="cpus" type="number" min="2" max="1024" value="4" aria-label="Virtual CPU count"><span class="muted">vCPUs</span></div></div>
+      <div class="form-row"><label for="disk">Disk limit</label><div class="file-field"><input id="disk" type="number" min="64" max="1048576" value="128" ${edit?'disabled':''} aria-label="Disk capacity in GiB"><span class="muted">GiB</span></div></div>
+      <p class="form-note">Host: 32 GiB · 12 CPUs</p><p class="form-note">Disk space grows as needed.</p>
+      <p id="cad-note" class="form-note" hidden>Large CAD assemblies may need more memory. Compatibility is not certified.</p>
+      ${edit?'<p class="form-note">To increase capacity, use ⋯ → Expand disk, then Windows Disk Management.</p>':''}
+    </div>
+    <div class="tab-panel" id="panel-features" role="tabpanel" aria-labelledby="tab-features" data-panel="features" hidden><p class="form-note">Included automatically:<br>Graphics · Vulkan · Network · Sound<br>UEFI · TPM · Drivers · Guest agent</p><p class="form-note">Guest test signing enabled; Secure Boot disabled. Hardware rendering is verified during setup.</p></div>
+    <p class="error" id="validation-error" ${error?'':'hidden'}>Choose your Windows installation ISO.</p>`,
+    `<button data-close>Cancel</button><button class="primary" data-save="${edit?'edit':'create'}">${edit?'Save':'Create'}</button>`);
+  modal.dataset.edit=String(edit);showTab(tab);
+}
+const guide = '<p>Select +, choose a Windows ISO, then Create.</p><p>Keep Windows running through setup and restarts. Drivers and graphics install automatically. Setup finishes after hardware rendering is verified.</p><p>Sign-in details: ⋯ → Sign-in. If setup fails, select Retry; for host issues, select Repair.</p><p>Guest test signing is enabled and Secure Boot disabled for the required graphics driver.</p>';
+function showDiagnostics(){
+  const bad=state==='host';
+  const checks=[['Linux x86-64','Ubuntu 24.04 · x86_64',true],['KVM permissions',bad?'Current user cannot access /dev/kvm.':'Hardware virtualization available; /dev/kvm is accessible.',!bad],['QEMU','QEMU runtime detected.',true],['swtpm','Software TPM available.',true],['UEFI firmware','OVMF firmware detected.',true],['Yttrium runtime',bad?'Required runtime is unavailable. Retry / repair setup.':'Pinned runtime and matching drivers detected.',!bad]];
+  textDialog('Diagnostics',`<h2>Host readiness</h2><p>Linux · x86_64 · 12 CPUs · 32 GiB memory</p>${checks.map(([name,detail,ok])=>`<p class="checkline"><b class="${ok?'mint':'amber'}">${ok?'PASS':'CHECK'} · ${name}</b><span class="muted">(required)</span><br>${detail}</p>`).join('')}<h2>Yttrium graphics (required)</h2><p>Yttrium graphics and its host prerequisites are required for Windows setup. Setup installs the graphics driver and records a hardware rendering check before reporting completion. Host prerequisites do not prove guest acceleration.</p><p>Host stack: ${bad?'not ready or not verified':'prerequisites detected'}</p><h3>Windows CAD</h3><p>Configured display: yttrium<br>Guest verification: ${state==='complete'?'verified':'No guest acceleration report imported'}</p><h2>Display controls</h2><p>Windows scales to fit its window. Ctrl+Alt+M shows the controls; the View menu contains fullscreen, scaling and input capture. Ctrl+Alt+F toggles fullscreen; Ctrl+Alt+G releases input. If a shortcut does not respond, show controls first. Audio uses the host default backend.</p><p>New Windows environments install their required graphics and integration drivers automatically. Installation progress and failures appear on the Windows card.</p>`);
+}
+function fileDialog(kind){
+  const config={media:['Choose installation media','ISO images (*.iso)','Windows11.iso'],import:['Import backup','VM backup (*.virtue)','Windows CAD.virtue'],export:['Export backup','VM backup (*.virtue)','Windows CAD.virtue'],'gpu-report':['Import guest GPU verification report','JSON report (*.json)','guest-gpu-report.json']}[kind];
+  dialog(config[0],`<div class="file-field"><input aria-label="Current folder" value="/home/demo/${kind==='media'?'Downloads':'Backups'}" readonly></div><div class="file-list"><div class="file-head"><span>Name</span><span>Type</span></div><div><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-folder"/></svg> &nbsp; Documents</div><div><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-folder"/></svg> &nbsp; Downloads</div><div class="selected">${config[2]}</div></div><div class="form-row"><label for="file-name">File name</label><input id="file-name" value="${config[2]}"></div><div class="form-row"><label for="file-type">Files of type</label><select id="file-type"><option>${config[1]}</option><option>All files (*)</option></select></div><p class="notice">Illustrative file picker. No files are read or written.</p>`, `<button data-file-cancel>Cancel</button><button class="primary" data-file-select="${kind}">${kind==='export'?'Save':'Open'}</button>`);
+}
+function message(title,body){dialog(title,`<p>${body}</p>`,'<button data-close>OK</button>');}
+function confirmDialog(title,body,next='',danger=false){dialog(title,`<p>${body}</p>`,`<button data-close>Cancel</button><button class="${danger?'danger':'primary'}" ${next?`data-screen="${next}"`:'data-finish'}>Continue</button>`);}
+function inputDialog(title,label,value,type='text',next=''){
+  dialog(title,`<div class="dialog-field"><label for="prompt-input">${label}</label>${type==='select'?`<select id="prompt-input"><option>before-driver-update</option><option>clean-windows-install</option></select>`:`<input id="prompt-input" type="${type}" value="${esc(value)}" ${type==='number'?'min="129" max="1048576"':''}>`}</div>`,`<button data-close>Cancel</button><button class="primary" ${next?`data-screen="${next}"`:'data-finish'}>OK</button>`);
+}
+function openScreen(screen){
+  closeMenu();if(!screen){if(modal.open)closeDialog();$('library-window').hidden=false;$('vm-window').hidden=true;return;}
+  if(screen==='vm-window'||screen==='vm-controls'){if(modal.open)closeDialog();$('library-window').hidden=true;$('vm-window').hidden=false;$('vm-controls').hidden=screen!=='vm-controls';return;}
+  if(screen.startsWith('create')||screen.startsWith('settings')){showVMDialog(screen.startsWith('settings'),screen.endsWith('resources')?'resources':screen.endsWith('features')?'features':'media',screen==='create-error');return;}
+  switch(screen){
+    case 'manage':case 'help':if(modal.open)modal.close();if(screen==='manage'&&!$('manage-button')){state='ready';$('workspace-state').value=state;renderWorkspace();}showMenu(screen,$(screen==='manage'?'manage-button':'help-button'));break;
+    case 'diagnostics':showDiagnostics();break;
+    case 'display-help':textDialog('Display','Ctrl+Alt+M    Show / hide controls\nCtrl+Alt+F    Fullscreen\nCtrl+Alt+G    Release input\n\nIf a shortcut does not respond, show controls first.\nView → Zoom To Fit scales Windows to the window.\nUse Shut down in the library to stop Windows safely.\n\nHTML frame preview only; actual desktop decorations may differ.',true);break;
+    case 'guide':textDialog('Setup',guide);break;
+    case 'media':case 'import':case 'export':case 'gpu-report':fileDialog(screen);break;
+    case 'credentials':message('Sign-in','Username: virtue<br>Password: demo-password-only<br><span class="muted small">Illustrative credentials for this preview.</span>');break;
+    case 'details':textDialog('Setup details','Windows CAD\nSetup state: error\nPhase: Installing Yttrium and Vulkan\n\nHardware rendering check failed.\nA verified guest acceleration report was not received.\n\nGuest diagnostic logs (sample):\nIntegration drivers installed.\nYttrium graphics driver installed.\nVulkan runtime installed.\nHardware rendering verification requires attention.\n\nUse Retry automatic setup to continue.',true);break;
+    case 'log':textDialog('Windows CAD · runtime log','[Sample runtime log]\nQEMU runtime prepared.\nUEFI variables loaded.\nTPM state loaded.\nVirtual disk opened.\nDisplay: Yttrium / VirtIO GPU\nNetwork: user mode\nGuest agent: connected\n\nWindows environment is ready.',true);break;
+    case 'verification':textDialog('Guest graphics verification','{\n  "state": "verified",\n  "historical": true,\n  "reasons": [],\n  "evidence": {\n    "renderer": "Venus / Zink (sample)",\n    "hardware_rendering": true,\n    "draw_result": "passed"\n  }\n}',true);break;
+    case 'checkpoint':inputDialog('New checkpoint','Name (letters, numbers, - or _):','before-driver-update');break;
+    case 'restore':inputDialog('Restore checkpoint','Checkpoint','','select','restore-confirm');break;
+    case 'restore-confirm':confirmDialog('Restore checkpoint?','Replaces Windows files and TPM state. Changes since this checkpoint will be lost. Export a backup to keep them.','',true);break;
+    case 'no-checkpoints':message('No recovery checkpoints','Create a checkpoint while Windows is stopped first.');break;
+    case 'expand':inputDialog('Expand disk','New limit (GiB). Extend the partition in Windows Disk Management afterward:','192','number');break;
+    case 'restart':confirmDialog('Restart?','Save your work in Windows before restarting.');break;
+    case 'force':confirmDialog('Force stop?','Unsaved work will be lost. The Windows disk may need repair. Try Shut down first.','',true);break;
+    case 'remove':inputDialog('Remove','Files and checkpoints move to the storage folder’s .trash directory for recovery.<br><br>Type the name to confirm: '+(isLegacy()?'Windows Legacy':'Windows CAD'),'');$('modal-footer').lastElementChild.removeAttribute('data-finish');$('modal-footer').lastElementChild.dataset.removeConfirm='';break;
+    case 'name-mismatch':message('Name does not match','Windows was kept. The confirmation must exactly match the environment name.');break;
+    case 'exported':message('Backup exported','Saved to:<br>/home/demo/Backups/Windows CAD.virtue<br><span class="muted small">Sample result. No file was created.</span>');break;
+    case 'error':message('Unable to complete action','The operation could not be completed. The Windows ISO does not exist or cannot be read. Choose the file again.');break;
+    case 'in-progress':message('Operation in progress','Wait for the current operation to finish.');break;
+    case 'leave':confirmDialog('Leave Running?','Windows keeps running after this window closes. To stop it, choose Shut down first.');break;
+    case 'unavailable':message('Support files unavailable','Reinstall the app or open docs in the source folder.');break;
+    case 'folder':message('Open Windows folder','/home/demo/.local/share/virtue/vms/windows-cad<br><span class="muted small">The desktop app opens this location in your file manager.</span>');break;
+    case 'support':message('Open support folder','Open this folder in your file manager:<br>/opt/virtue/share/docs');break;
+    case 'shutdown-action':case 'pause-action':previewAction(screen==='shutdown-action'?'Requesting a safe Windows shutdown…':'Pausing or resuming Windows…');break;
+  }
+}
+function previewAction(label){$('status').textContent=label+' (Preview only)';closeMenu();}
+document.addEventListener('click',event=>{
+  const target=event.target.closest('button');
+  if(!target){if(!popup.contains(event.target))closeMenu();return;}
+  if(target.disabled)return;
+  if(target.hasAttribute('data-vm-menu')){showMenu('vm-'+target.dataset.vmMenu,target);return;}
+  if(target.id==='manage-button'||target.id==='help-button'){const kind=target.id==='manage-button'?'manage':'help';if(menuAnchor===target&&!popup.hidden)closeMenu();else showMenu(kind,target);return;}
+  if(target.hasAttribute('data-close')||target.id==='close-dialog'){closeDialog();return;}
+  if(target.hasAttribute('data-tab')){showTab(target.dataset.tab);return;}
+  if(target.hasAttribute('data-preview')){previewAction(target.dataset.preview);return;}
+  if(target.hasAttribute('data-browse')){returnTo=modal.dataset.edit==='true'?'settings':'create';const name=$('vm-name').value;const iso=$('vm-iso').value;const drivers=$('vm-drivers')?.value||'';modal.dataset.savedName=name;modal.dataset.savedIso=iso;modal.dataset.savedDrivers=drivers;modal.dataset.browseField=target.dataset.browse;fileDialog('media');return;}
+  if(target.hasAttribute('data-file-cancel')){if(returnTo){const dest=returnTo;returnTo='';restoreMediaForm(dest);}else closeDialog();return;}
+  if(target.hasAttribute('data-file-select')){
+    const kind=target.dataset.fileSelect;
+    if(kind==='media'&&returnTo){const dest=returnTo;returnTo='';const chosen=$('file-name').value;const field=modal.dataset.browseField;restoreMediaForm(dest);$(field==='drivers'?'vm-drivers':'vm-iso').value='/home/demo/Downloads/'+chosen;}
+    else if(kind==='gpu-report')openScreen('verification');else if(kind==='export')openScreen('exported');else{closeDialog();previewAction(kind==='import'?'Validating and importing the Windows backup…':'Installation media selected');}return;
+  }
+  if(target.hasAttribute('data-save')){
+    const invalid=!$('vm-name').value.trim()?'Give your Windows environment a name.':target.dataset.save==='create'&&!$('vm-iso').value.trim()?'Choose your Windows installation ISO.':'';
+    if(invalid){$('validation-error').textContent=invalid;$('validation-error').hidden=false;showTab('media');return;}
+    closeDialog();previewAction('Preview complete');return;
+  }
+  if(target.hasAttribute('data-remove-confirm')){if($('prompt-input').value!==(isLegacy()?'Windows Legacy':'Windows CAD'))openScreen('name-mismatch');else{closeDialog();previewAction('Remove Windows preview');}return;}
+  if(target.hasAttribute('data-finish')){const input=$('prompt-input');if(input&&!input.checkValidity()){input.reportValidity();return;}closeDialog();previewAction('Preview complete');return;}
+  if(target.hasAttribute('data-screen')){openScreen(target.dataset.screen);return;}
+  if(!popup.contains(target))closeMenu();
+});
+function restoreMediaForm(dest){const saved={name:modal.dataset.savedName,iso:modal.dataset.savedIso,drivers:modal.dataset.savedDrivers};openScreen(dest);$('vm-name').value=saved.name;$('vm-iso').value=saved.iso;if($('vm-drivers'))$('vm-drivers').value=saved.drivers;}
+document.addEventListener('change',event=>{
+  if(event.target.id==='workspace-state'){if(modal.open)closeDialog();state=event.target.value;$('screen-picker').value='';renderWorkspace();}
+  if(event.target.id==='screen-picker'){returnTo='';openScreen(event.target.value);}
+  if(event.target.id==='preset'){
+    const values={'Light':[4,2,64],'Balanced':[8,4,128],'High Performance':[16,8,256],'CAD / Engineering':[16,8,256]}[event.target.value];
+    $('cad-note').hidden=event.target.value!=='CAD / Engineering';
+    if(values)['memory','cpus','disk'].forEach((key,i)=>{if(!$(key).disabled)$(key).value=values[i];});
+  }
+  if(['memory','cpus','disk'].includes(event.target.id)){$('preset').value='Custom';$('cad-note').hidden=true;}
+});
+document.addEventListener('keydown',event=>{
+  if(!$('vm-window').hidden&&!modal.open&&event.ctrlKey&&event.altKey&&event.key.toLowerCase()==='m'){event.preventDefault();closeMenu();$('vm-controls').hidden=!$('vm-controls').hidden;return;}
+  if(event.key==='Escape'&&!popup.hidden){event.preventDefault();const anchor=menuAnchor;closeMenu();if(anchor)anchor.focus();}
+  else if(!popup.hidden&&['ArrowDown','ArrowUp','Home','End'].includes(event.key)){
+    event.preventDefault();const items=[...popup.querySelectorAll('button:not(:disabled)')];let i=items.indexOf(document.activeElement);i=event.key==='Home'?0:event.key==='End'?items.length-1:(i+(event.key==='ArrowDown'?1:-1)+items.length)%items.length;items[i].focus();
+  }
+  if(event.target.matches('[role=tab]')&&['ArrowRight','ArrowLeft'].includes(event.key)){event.preventDefault();const tabs=[...modal.querySelectorAll('[role=tab]')];const i=(tabs.indexOf(event.target)+(event.key==='ArrowRight'?1:2))%3;showTab(tabs[i].dataset.tab);tabs[i].focus();}
+});
+modal.addEventListener('close',()=>{$('screen-picker').value='';returnTo='';});
+window.addEventListener('resize',closeMenu);
+window.addEventListener('scroll',closeMenu);
+$('cards').addEventListener('scroll',closeMenu);
+const frameObserver=new ResizeObserver(closeMenu);
+document.querySelectorAll('.shell').forEach(frame=>frameObserver.observe(frame));
+renderWorkspace();
+</script>
+</body>
+</html>

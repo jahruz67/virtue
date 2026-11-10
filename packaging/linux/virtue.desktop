@@ -7,4 +7,5 @@ Icon=virtue
 Terminal=false
 Categories=System;Emulator;
 StartupNotify=true
+StartupWMClass=virtue
 

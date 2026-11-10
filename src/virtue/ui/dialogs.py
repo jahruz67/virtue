@@ -3,12 +3,15 @@ from __future__ import annotations
 import html
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtGui import QPainter, QPalette
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QTabWidget,
-    QTextBrowser, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QLayout, QLineEdit, QScrollArea, QSpinBox, QTabWidget,
+    QSizePolicy, QTextBrowser, QVBoxLayout, QWidget,
 )
+
+from .icons import icon_button
 
 
 PRESETS = {
@@ -23,9 +26,47 @@ def label(text, object_name=None, wrap=False):
     result = QLabel(text)
     result.setTextFormat(Qt.TextFormat.PlainText)
     result.setWordWrap(wrap)
+    if wrap:
+        policy = result.sizePolicy()
+        policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        result.setSizePolicy(policy)
+        result.setMinimumWidth(0)
     if object_name:
         result.setObjectName(object_name)
     return result
+
+
+class ElidedLabel(QLabel):
+    """Keep transient text to one line without losing the full accessible text."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(0)
+        self.setText(text)
+
+    def setText(self, text):
+        super().setText(text)
+        self.setToolTip(text)
+        self.setAccessibleName(text)
+
+    def sizeHint(self):
+        return QSize(0, self.fontMetrics().height())
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        text = self.fontMetrics().elidedText(
+            " ".join(self.text().splitlines()), Qt.TextElideMode.ElideRight,
+            self.contentsRect().width(),
+        )
+        self.style().drawItemText(
+            painter, self.contentsRect(), self.alignment(), self.palette(),
+            self.isEnabled(), text, QPalette.ColorRole.WindowText,
+        )
 
 
 class FileField(QWidget):
@@ -34,8 +75,8 @@ class FileField(QWidget):
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         self.path = QLineEdit(value or "")
-        self.path.setPlaceholderText("Choose an ISO file…")
-        browse = QPushButton("Browse…")
+        self.path.setPlaceholderText("Select ISO…")
+        browse = icon_button("folder", "Choose ISO file")
         browse.clicked.connect(self.browse)
         row.addWidget(self.path, 1)
         row.addWidget(browse)
@@ -56,20 +97,28 @@ class VMDialog(QDialog):
         super().__init__(parent)
         self.vm = vm
         vm = vm or {}
-        self.setWindowTitle("Windows settings" if self.vm else "Create Windows")
-        self.setMinimumWidth(630)
+        self.setWindowTitle("Settings" if self.vm else "New Windows")
+        self.setMinimumSize(420, 320)
+        self.resize(660, 520)
         self.setModal(True)
         root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(16)
-        root.addWidget(label("Make room for Windows" if not self.vm else vm.get("name", "Windows"), "sectionTitle"))
-        root.addWidget(label("Choose your Windows ISO. Installation, required downloads and driver setup are automatic.", "muted", True))
-        tabs = QTabWidget()
-        root.addWidget(tabs)
+        self.tabs = QTabWidget()
+        root.addWidget(self.tabs)
         basics, resources, devices = QWidget(), QWidget(), QWidget()
-        tabs.addTab(basics, "Windows & media")
-        tabs.addTab(resources, "Resources")
-        tabs.addTab(devices, "Included features")
+        for page, title in ((basics, "General"), (resources, "Resources"), (devices, "Features")):
+            page.setObjectName("settingsPage")
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+            scroll.setWidget(page)
+            self.tabs.addTab(scroll, title)
         form = QFormLayout(basics)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        form.setContentsMargins(20, 20, 20, 20)
         form.setSpacing(14)
         self.name = QLineEdit(vm.get("name", "Windows"))
         self.name.setMaxLength(80)
@@ -84,23 +133,27 @@ class VMDialog(QDialog):
         self.drivers = FileField(vm.get("drivers_iso_path", ""))
         form.addRow("Name", self.name)
         if self.vm:
-            form.addRow("Windows version", self.version)
+            form.addRow("Version", self.version)
         form.addRow("Windows ISO", self.iso)
         if self.vm:
-            form.addRow("VirtIO drivers ISO", self.drivers)
+            form.addRow("Drivers ISO", self.drivers)
         else:
             self.drivers.hide()
-        help_text = label("Use your own Windows ISO and valid license. Virtue detects the Windows edition, downloads all required components, and installs Windows, Yttrium graphics and integration drivers. Creating Windows accepts the supplied installation media's license terms.", "muted", True)
+        help_text = label("Windows ISO and license required. Creating Windows accepts the ISO’s license terms.", "muted", True)
         form.addRow(help_text)
-        self.installed = QCheckBox("Installation complete · boot the installed Windows disk")
+        self.installed = QCheckBox("Installation complete")
+        self.installed.setToolTip("Boot the installed Windows disk")
         self.installed.setChecked(bool(vm.get("installed", False)))
         self.installed.setVisible(bool(self.vm) and not vm.get("auto_setup", False))
         form.addRow(self.installed)
-        self.legacy = label("Windows 10 is a legacy compatibility target. Use Windows 11 for new environments.", "muted", True)
+        self.legacy = label("Windows 10 is legacy. Windows 11 recommended.", "muted", True)
         self.legacy.setVisible(self.version.currentData() == "10")
         self.version.currentIndexChanged.connect(lambda: self.legacy.setVisible(self.version.currentData() == "10"))
         form.addRow(self.legacy)
         form2 = QFormLayout(resources)
+        form2.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form2.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        form2.setContentsMargins(20, 20, 20, 20)
         form2.setSpacing(14)
         self.preset = QComboBox()
         self.preset.addItems([*PRESETS, "Custom"])
@@ -121,22 +174,25 @@ class VMDialog(QDialog):
         self.disk.setEnabled(not bool(self.vm))
         form2.addRow("Preset", self.preset)
         form2.addRow("Memory", self.memory)
-        form2.addRow("Virtual CPU allocation", self.cpus)
-        form2.addRow("Maximum disk capacity", self.disk)
+        form2.addRow("CPUs", self.cpus)
+        form2.addRow("Disk limit", self.disk)
         total_mem = host.get("memory_mib", 0) / 1024
-        form2.addRow(label(f"Host: {total_mem:g} GiB memory · {host.get('cpus', '?')} logical CPUs. Resource choices are validated before saving; leave enough memory and CPU capacity for Linux.", "muted", True))
-        self.preset_note = label("Disk space is allocated as needed. The virtual disk limit is not the amount immediately used on your host.", "muted", True)
+        form2.addRow(label(f"Host: {total_mem:g} GiB · {host.get('cpus', '?')} CPUs", "muted", True))
+        self.preset_note = label("Disk space grows as needed.", "muted", True)
         form2.addRow(self.preset_note)
-        self.cad_note = label("CAD / Engineering starts at 16 GiB. Large SOLIDWORKS assemblies may need more. Graphics compatibility and performance require testing; this preset is not a certification.", "muted", True)
+        self.cad_note = label("Large CAD assemblies may need more memory. Compatibility is not certified.", "muted", True)
         self.cad_note.hide()
         form2.addRow(self.cad_note)
         if self.vm:
-            form2.addRow(label("Use Expand disk from the Windows menu to increase an existing disk. Grow the partition in Windows Disk Management afterward.", "muted", True))
+            form2.addRow(label("To increase capacity, use ⋯ → Expand disk, then Windows Disk Management.", "muted", True))
         self.preset.currentTextChanged.connect(self.apply_preset)
         self.preset.setCurrentText("Custom")
         for spin in (self.memory, self.cpus, self.disk):
             spin.valueChanged.connect(self.mark_custom)
         form3 = QFormLayout(devices)
+        form3.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form3.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        form3.setContentsMargins(20, 20, 20, 20)
         form3.setSpacing(14)
         self.storage_bus = QComboBox()
         self.storage_bus.addItem("Compatible SATA · installer ready", "sata")
@@ -146,14 +202,13 @@ class VMDialog(QDialog):
         self.virtio_network.setChecked(bool(vm.get("virtio_network", False)))
         self.storage_bus.hide()
         self.virtio_network.hide()
-        form3.addRow(label("Yttrium accelerated graphics, Vulkan runtime, networking, sound, UEFI, a virtual TPM, integration drivers and the Windows guest agent are included in automatic setup. No driver ISO or terminal commands are needed.", "muted", True))
-        form3.addRow(label("Yttrium currently uses guest test signing with guest Secure Boot disabled. Virtue configures this for new VMs and checks hardware rendering before reporting setup complete.", "muted", True))
-        self.error = label("", wrap=True)
-        self.error.setStyleSheet("color: #ffb2ad;")
+        form3.addRow(label("Included automatically:\nGraphics · Vulkan · Network · Sound\nUEFI · TPM · Drivers · Guest agent", "muted", True))
+        form3.addRow(label("Guest test signing enabled; Secure Boot disabled. Hardware rendering is verified during setup.", "muted", True))
+        self.error = label("", "error", True)
         self.error.hide()
-        root.addWidget(self.error)
+        form.addRow(self.error)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Save settings" if self.vm else "Create Windows")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Save" if self.vm else "Create")
         buttons.button(QDialogButtonBox.StandardButton.Ok).setObjectName("primary")
         buttons.accepted.connect(self.validate)
         buttons.rejected.connect(self.reject)
@@ -190,6 +245,8 @@ class VMDialog(QDialog):
         if reason:
             self.error.setText(reason)
             self.error.show()
+            self.tabs.setCurrentIndex(0)
+            QTimer.singleShot(0, lambda: self.tabs.widget(0).ensureWidgetVisible(self.error))
         else:
             self.accept()
 
@@ -212,10 +269,13 @@ class TextDialog(QDialog):
     def __init__(self, title, text, parent=None, *, rich=False):
         super().__init__(parent)
         self.setWindowTitle(title)
+        self.setMinimumSize(420, 320)
         self.resize(780, 600)
         layout = QVBoxLayout(self)
-        layout.addWidget(label(title, "sectionTitle"))
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
         self.text = QTextBrowser()
+        self.text.setMinimumSize(0, 0)
         self.text.setOpenExternalLinks(True)
         if rich:
             self.text.setHtml(text)
@@ -231,7 +291,7 @@ def diagnostics_html(host, vms):
     esc = lambda value: html.escape(str(value))
     parts = ["<h2>Host readiness</h2>", f"<p>{esc(host.get('platform', 'Unknown'))} · {esc(host.get('architecture', 'Unknown'))} · {esc(host.get('cpus', '?'))} CPUs · {host.get('memory_mib', 0) / 1024:g} GiB memory</p>"]
     for check in host.get("checks", []):
-        color = "#77e0c6" if check.get("ok") else "#ffc08c"
+        color = "#14724d" if check.get("ok") else "#965a10"
         requirement = "required" if check.get("required") else "information"
         parts.append(f"<p><b style='color:{color}'>{'PASS' if check.get('ok') else 'CHECK'} · {esc(check.get('name', 'Dependency'))}</b> ({requirement})<br>{esc(check.get('detail', ''))}</p>")
     parts.append("<h2>Yttrium graphics (required)</h2><p>Yttrium graphics and its host prerequisites are required for Windows setup. Automatic Windows setup installs the graphics driver and records a hardware rendering check before reporting completion. Host prerequisites do not prove guest acceleration.</p>")
@@ -256,15 +316,14 @@ def diagnostics_html(host, vms):
                 parts.append("<p>" + "<br>".join(f"{esc(key.replace('_', ' '))}: {esc(value)}" for key, value in evidence.items()) + "</p>")
         else:
             parts.append(f"<p>Guest verification: {esc(result)}</p>")
-    parts.append("<h2>Display controls</h2><p>Windows runs in QEMU’s native display window. Use its View menu for fullscreen and scaling. Ctrl+Alt+G releases captured input; Ctrl+Alt+F toggles fullscreen on supported GTK builds. A USB tablet provides absolute pointer positioning. Audio uses the host default audio backend.</p>")
+    parts.append("<h2>Display controls</h2><p>Windows scales to fit its window. Ctrl+Alt+M shows the controls; the View menu contains fullscreen, scaling and input capture. Ctrl+Alt+F toggles fullscreen; Ctrl+Alt+G releases input. If a shortcut does not respond, show controls first. Audio uses the host default backend.</p>")
     parts.append("<p>New Windows environments install their required graphics and integration drivers automatically. Installation progress and failures appear on the Windows card.</p>")
     return "".join(parts)
 
 
 GRAPHICS_GUIDE = """
-<h2>Automatic Windows setup</h2>
-<p>Choose your Windows ISO and select Create Windows. Virtue downloads and verifies the required runtime and drivers, prepares Windows installation, and starts it automatically.</p>
-<p>Windows restarts as its integration drivers, Yttrium graphics and Vulkan runtime are installed. Leave the VM running until its card reports setup complete. Windows signs in automatically; its generated sign-in details remain available in Manage Windows.</p>
-<p>Yttrium is required. New VMs use the guest signing settings needed by its current driver. Virtue checks actual hardware rendering before reporting completion.</p>
-<p>If a download or installation fails, use Retry / repair setup or Retry automatic setup in the app. No terminal or manual driver installation is part of this flow.</p>
+<p>Select +, choose a Windows ISO, then Create.</p>
+<p>Keep Windows running through setup and restarts. Drivers and graphics install automatically. Setup finishes after hardware rendering is verified.</p>
+<p>Sign-in details: ⋯ → Sign-in. If setup fails, select Retry; for host issues, select Repair.</p>
+<p>Guest test signing is enabled and Secure Boot disabled for the required graphics driver.</p>
 """

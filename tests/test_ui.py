@@ -60,7 +60,7 @@ def ready_window(app):
 
 def test_launch_button_uses_background_service_and_safe_mode(app):
     service, window = ready_window(app)
-    launch = next(button for button in window.findChildren(QPushButton) if button.text() == "Launch Windows")
+    launch = next(button for button in window.findChildren(QPushButton) if button.text() == "Start")
     launch.click()
     wait_for_idle(app, window)
     assert service.calls == [("start", "vm-test", False)]
@@ -118,9 +118,9 @@ def test_installation_keeps_recovery_available_while_mutations_stay_locked(app, 
         assert not window.create_button.isEnabled()
         assert not window.import_button.isEnabled()
         actions = {action.text(): action for action in window.vm_menu(VM).actions()}
-        assert not actions["Windows settings…"].isEnabled()
-        assert not actions["Create recovery checkpoint…"].isEnabled()
-        assert actions["View runtime log…"].isEnabled()
+        assert not actions["Settings…"].isEnabled()
+        assert not actions["New checkpoint…"].isEnabled()
+        assert actions["Runtime log…"].isEnabled()
         assert all(bar.objectName() == "setupProgress" for bar in window.findChildren(QProgressBar))
         window.start_vm(vm)
         assert service.calls == []
@@ -173,8 +173,8 @@ def test_stalled_installation_can_be_force_stopped(app):
     try:
         window.render_vms([vm])
         actions = {action.text(): action for action in window.vm_menu(vm).actions()}
-        assert actions["Force power off…"].isEnabled()
-        actions["Force power off…"].trigger()
+        assert actions["Force stop…"].isEnabled()
+        actions["Force stop…"].trigger()
         wait_for_idle(app, window)
         assert service.calls == [("force_stop", vm["id"])]
     finally:
@@ -191,7 +191,7 @@ def test_failed_vm_can_retry_while_another_vm_installs(app):
     window.confirm = lambda *_args, **_kwargs: True
     try:
         window.render_vms([installing, failed])
-        retry = next(button for button in window.cards.findChildren(QPushButton) if button.text() == "Retry automatic setup")
+        retry = next(button for button in window.cards.findChildren(QPushButton) if button.text() == "Retry")
         assert retry.isEnabled()
         retry.click()
         wait_for_idle(app, window)
@@ -207,7 +207,7 @@ def test_missing_host_disables_creation_and_launch(app):
     window.render_vms([dict(VM)])
     assert not window.create_button.isEnabled()
     assert "KVM permissions" in window.banner_text.text()
-    launch = [button for button in window.cards.findChildren(QPushButton) if button.text() == "Launch Windows"][-1]
+    launch = [button for button in window.cards.findChildren(QPushButton) if button.text() == "Start"][-1]
     assert not launch.isEnabled()
     window.close()
 
@@ -272,10 +272,10 @@ def test_live_process_remains_manageable_after_qmp_failure(app):
     vm = {**VM, "state": "error", "process_active": True}
     menu = window.vm_menu(vm)
     actions = {action.text(): action for action in menu.actions()}
-    assert actions["Force power off…"].isEnabled()
-    assert not actions["Windows settings…"].isEnabled()
-    assert not actions["Create recovery checkpoint…"].isEnabled()
-    assert not actions["Remove Windows from library…"].isEnabled()
+    assert actions["Force stop…"].isEnabled()
+    assert not actions["Settings…"].isEnabled()
+    assert not actions["New checkpoint…"].isEnabled()
+    assert not actions["Remove…"].isEnabled()
     assert window.vm_active(vm)
     window.close()
 
@@ -284,7 +284,7 @@ def test_safe_launch_allows_pause_using_actual_display_mode(app):
     _, window = ready_window(app)
     vm = {**VM, "state": "running", "graphics": "yttrium", "active_graphics": "safe"}
     actions = {action.text(): action for action in window.vm_menu(vm).actions()}
-    assert actions["Pause Windows"].isEnabled()
+    assert actions["Pause"].isEnabled()
     window.close()
 
 

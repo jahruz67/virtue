@@ -51,7 +51,10 @@ graphics toggle or manual installation-complete checkbox are part of this flow.
 Use **Retry / repair setup** or **Retry automatic setup** if setup reports a failure.
 
 Windows remains a separately managed guest. Fullscreen, scaling, keyboard/mouse
-capture and audio use QEMU GTK (View menu; release captured input with Ctrl+Alt+G).
+capture and audio use QEMU GTK. The display scales to fit its window; menus and
+console tabs are hidden initially. Ctrl+Alt+M shows the controls, Ctrl+Alt+F toggles
+fullscreen, and Ctrl+Alt+G releases input (show controls first if needed). The VM
+process uses its own light GTK theme; desktop-managed title bars may vary.
 The default user network permits outbound connections without opening host ports.
 Clipboard, shared folders, seamless individual apps and multi-monitor integration
 are not implemented in this preview.

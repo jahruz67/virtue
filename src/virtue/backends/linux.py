@@ -29,6 +29,7 @@ import uuid
 
 from .backend import BackendError
 from .command import build_qemu_command, option
+from .display import display_environment
 from .qmp import QMPClient, QMPError
 
 
@@ -475,6 +476,11 @@ class LinuxBackend:
             if setup_iso and not setup_iso.is_file():
                 raise BackendError("Automatic Windows installation media is missing. Retry setup in the app.")
             prefix = self._prefix(graphics, directory, runtime, config)
+            sandboxed = Path(prefix[0]).name == "flatpak" and "run" in prefix
+            display_env = display_environment(runtime, sandboxed=sandboxed)
+            if sandboxed:
+                index = prefix.index("run") + 1
+                prefix[index:index] = [f"--env={key}={value}" for key, value in display_env.items()]
             code = self._firmware_code(directory)
             hyperv = self._hyperv(prefix, config)
             audio_backend = self._audio_backend(prefix)
@@ -508,7 +514,7 @@ class LinuxBackend:
                         time.sleep(0.05)
                     metadata["swtpm"] = _process_identity(tpm.pid)
                     qemu = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                            start_new_session=True, close_fds=True)
+                                            start_new_session=True, close_fds=True, env={**os.environ, **display_env})
                     self._children[qemu.pid] = qemu
                     deadline = time.monotonic() + 20
                     while not ((runtime / "qemu.pid").exists() and (runtime / "qmp.sock").exists()):

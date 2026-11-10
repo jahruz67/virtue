@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import sys
 
 from . import __version__
 
@@ -26,10 +25,13 @@ def main(argv: list[str] | None = None) -> int:
     from .services import VMService
     from .store import VMStore
     from .ui import create_window
+    from .ui.icons import app_icon
     QCoreApplication.setOrganizationName("Virtue")
-    QCoreApplication.setApplicationName("Virtue")
-    application = QApplication([sys.argv[0]])
+    QCoreApplication.setApplicationName("virtue")
+    application = QApplication(["virtue"])
     application.setApplicationDisplayName("Virtue")
+    application.setDesktopFileName("virtue")
+    application.setWindowIcon(app_icon())
     try:
         service = VMService(VMStore(args.data_dir))
         window = create_window(service)

@@ -21,7 +21,7 @@ class QemuCommandTests(unittest.TestCase):
         self.assertIn("kvm", cmd)
         self.assertNotIn("tcg", " ".join(cmd))
         self.assertIn("tpm-crb,tpmdev=tpm0", cmd)
-        self.assertIn("gtk,gl=on", cmd)
+        self.assertIn("gtk,gl=on,show-menubar=off,show-tabs=off,zoom-to-fit=on", cmd)
         self.assertIn("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", cmd)
         self.assertTrue(any("Windows,,11.iso" in arg for arg in cmd))
         block = json.loads(cmd[cmd.index("-blockdev") + 1])
@@ -50,7 +50,7 @@ class QemuCommandTests(unittest.TestCase):
     def test_safe_fallback_preserves_configuration(self):
         config = self.config(graphics="yttrium", secure_boot=False, graphics_consent=True)
         cmd = self.command(config, safe_graphics=True)
-        self.assertIn("gtk,gl=off", cmd)
+        self.assertIn("gtk,gl=off,show-menubar=off,show-tabs=off,zoom-to-fit=on", cmd)
         self.assertNotIn("venus=on", " ".join(cmd))
         self.assertEqual(config.graphics, "yttrium")
 
