@@ -6,9 +6,10 @@ installation media and Vulkan runtime. The desktop's administrator prompt handle
 system packages and KVM access when needed. No terminal is part of the user flow.
 
 Windows installation uses a generated answer file. Guest drivers, certificates,
-test signing, required restarts and a hardware OpenGL draw check are automatic.
-Progress and retry controls appear on the Windows card. Setup is complete only
-after the guest reports hardware rendering. The original Windows ISO is unchanged.
+test signing and required restarts are automatic. Progress and retry controls
+appear on the Windows card. Setup completes after the drivers and Vulkan runtime
+are installed and Windows restarts. Graphics diagnostics are optional and do not
+block setup completion. The original Windows ISO is unchanged.
 
 The answer-file flow follows [Microsoft's Windows Setup automation reference](https://learn.microsoft.com/windows-hardware/manufacture/desktop/windows-setup-automation-overview?view=windows-11).
 

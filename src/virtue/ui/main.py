@@ -313,11 +313,13 @@ class MainWindow(QMainWindow):
 
     def setup_indicator(self, vm):
         stages = ("Installing Windows", "Installing integration drivers",
-                  "Installing Yttrium and Vulkan", "Checking accelerated graphics")
+                  "Installing Yttrium and Vulkan")
         setup = vm.get("setup", {})
         phase = setup.get("phase", 0)
-        if type(phase) is not int or not 0 <= phase < len(stages):
+        if type(phase) is not int or phase < 0:
             phase = 0
+        else:
+            phase = min(phase, len(stages) - 1)
         complete = bool(vm.get("installed"))
         failed = setup.get("state") == "error"
         paused = vm.get("state") == "paused"
@@ -326,8 +328,8 @@ class MainWindow(QMainWindow):
         title = f"Step {phase + 1} of {len(stages)} · {stages[phase]}"
         message = str(setup.get("message") or "Windows Setup is running. Driver installation follows automatically; Windows may restart several times.")
         if complete:
-            title = "Setup complete · All 4 stages finished"
-            message = "Windows and accelerated graphics are ready."
+            title = "Setup complete · All 3 stages finished"
+            message = "Windows is ready."
         elif failed:
             title = "Setup needs attention"
         elif paused or stopped:
@@ -354,7 +356,7 @@ class MainWindow(QMainWindow):
         else:
             progress.setRange(0, len(stages))
             progress.setValue(len(stages) if complete else phase)
-        progress.setToolTip("Stages: Windows installation → integration drivers → Yttrium and Vulkan → graphics verification")
+        progress.setToolTip("Stages: Windows installation → integration drivers → Yttrium and Vulkan")
         layout.addWidget(progress)
         details = label(message, "muted", True)
         details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)

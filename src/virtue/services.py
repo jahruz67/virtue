@@ -138,17 +138,16 @@ class VMService:
                 return config
         report = progress.pop("graphics_report", None)
         if progress.get("state") == "ready":
-            from .graphics import classify_guest_report
-            try:
-                verification = classify_guest_report(report or {})
-            except (ValueError, TypeError, KeyError):
-                verification = {"state": "invalid"}
-            if verification["state"] != "hardware_rendering_observed":
-                progress.update(state="error", message="The required accelerated graphics check did not pass.")
-            else:
-                atomic_json(directory / "gpu-report.json", verification)
-                config = replace(config, installed=True, iso_path="", drivers_iso_path="")
-                self.store.save(config)
+            if report:
+                from .graphics import classify_guest_report
+                try:
+                    verification = classify_guest_report(report)
+                except (ValueError, TypeError, KeyError):
+                    pass
+                else:
+                    atomic_json(directory / "gpu-report.json", verification)
+            config = replace(config, installed=True, iso_path="", drivers_iso_path="")
+            self.store.save(config)
         atomic_json(directory / "setup-progress.json", progress)
         return config
 

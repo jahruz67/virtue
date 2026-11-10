@@ -399,90 +399,6 @@ function Start-Resume([System.Threading.Mutex]$setupMutex, [ref]$ownsSetupMutex)
     throw 'Windows did not start the setup task. Sign in to Windows as Virtue and retry automatic setup.'
 }
 
-function Invoke-GraphicsProbe([string]$collector, [string]$output) {
-    $start = [System.Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = Join-Path $PSHOME 'powershell.exe'
-    $start.Arguments = "-NoProfile -NonInteractive -OutputFormat Text -ExecutionPolicy Bypass -File `"$collector`" -OutputPath `"$output`""
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $start
-    $started = $false
-    try {
-        $started = $process.Start()
-        if (-not $started) { throw 'The graphics verification process could not be started.' }
-        # Own the process handle from launch, including when the collector exits quickly.
-        $stdout = $process.StandardOutput.ReadToEndAsync()
-        $stderr = $process.StandardError.ReadToEndAsync()
-        $completed = $process.WaitForExit(45000)
-        if (-not $completed) {
-            try { $process.Kill() } catch { if (-not $process.HasExited) { throw } }
-            if (-not $process.WaitForExit(5000)) { throw 'The graphics verification process could not be stopped.' }
-        }
-        $captureError = ''
-        try {
-            if (-not [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($stdout, $stderr), 5000)) {
-                $captureError = 'The graphics verification output did not finish.'
-            }
-        } catch { $captureError = $_.Exception.Message }
-        $outputText = if ($stdout.IsCompleted -and -not $stdout.IsFaulted -and -not $stdout.IsCanceled) { $stdout.Result } else { '' }
-        $errorText = if ($stderr.IsCompleted -and -not $stderr.IsFaulted -and -not $stderr.IsCanceled) { $stderr.Result } else { '' }
-        if ($captureError) { $errorText += "`n$captureError" }
-        $exitCode = $process.ExitCode
-        if ($null -eq $exitCode) { throw 'Windows did not provide the graphics verification exit code.' }
-        return [pscustomobject]@{ ExitCode=$exitCode; TimedOut=(-not $completed); StandardOutput=$outputText; StandardError=$errorText }
-    } finally {
-        try {
-            if ($started -and -not $process.HasExited) {
-                $process.Kill()
-                [void]$process.WaitForExit(5000)
-            }
-        } catch { Write-Warning 'Could not stop the graphics verification process during cleanup.' }
-        finally { $process.Dispose() }
-    }
-}
-
-function Test-Graphics {
-    $collector = Join-Path $work 'Collect-VirtueGpuReport.ps1'
-    $output = Join-Path $work 'gpu-report.json'
-    $lastFailure = 'No successful graphics report was produced.'
-    for ($attempt = 1; $attempt -le 12; $attempt++) {
-        Write-Status 'installing' "Checking accelerated graphics ($attempt/12)…" 3
-        [System.IO.File]::Delete($output)
-        $result = Invoke-GraphicsProbe $collector $output
-        try {
-            Write-WorkFile (Join-Path $work 'gpu-probe.stdout.txt') $result.StandardOutput
-            Write-WorkFile (Join-Path $work 'gpu-probe.stderr.txt') $result.StandardError
-        } catch { Write-Warning 'Could not save the complete graphics verification output.' }
-        if ($result.TimedOut) {
-            $lastFailure = 'The graphics verification process timed out.'
-        } elseif ($result.ExitCode -ne 0) {
-            $detail = if ($result.StandardError.Trim()) { $result.StandardError.Trim() } else { $result.StandardOutput.Trim() }
-            if ($detail.Length -gt 4000) { $detail = $detail.Substring(0, 4000) }
-            $lastFailure = "The graphics verification process failed (exit $($result.ExitCode)). $detail"
-        } else {
-            try {
-                $report = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json
-                $renderer = [string]$report.opengl.renderer
-                if ($report.opengl.draw_test_passed -eq $true -and $renderer -match 'zink' -and $renderer -match 'venus' -and $renderer -notmatch 'llvmpipe|lavapipe|swiftshader|Microsoft Basic Render|GDI Generic|software rasterizer') {
-                    return $report
-                }
-                if ($report.opengl.error) {
-                    $lastFailure = "The OpenGL verification failed: $($report.opengl.error)"
-                } else {
-                    $lastFailure = "The graphics report did not pass the hardware rendering check (renderer: $($report.opengl.renderer))."
-                }
-            } catch {
-                $lastFailure = "The graphics report could not be read: $($_.Exception.Message)"
-            }
-        }
-        if ($attempt -lt 12) { Start-Sleep -Seconds 5 }
-    }
-    throw "The graphics driver did not pass its hardware rendering check. $lastFailure"
-}
-
 $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
@@ -585,14 +501,13 @@ try {
         $hashes = Get-Content -LiteralPath (Join-Path $work 'asset-checksums.json') -Raw | ConvertFrom-Json
         Write-WorkFile ($installedAssetsPath + '.tmp') (@{ guest=$hashes.guest; vulkan=$hashes.vulkan } | ConvertTo-Json)
         Move-Item -LiteralPath ($installedAssetsPath + '.tmp') -Destination $installedAssetsPath -Force
-        Write-Status 'installing' 'Checking accelerated graphics after restart…' 3
+        Write-Status 'installing' 'Finishing Windows setup after restart…' 3
         Restart-Computer -Force
     } elseif ($phase -eq 3) {
-        $report = Test-Graphics
         # Keep this private VM opening directly into its generated Windows account.
         Enable-AutomaticLogon
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-        Write-Status 'ready' 'Windows and accelerated graphics are ready.' 3 $report
+        Write-Status 'ready' 'Windows is ready.' 3
     } else { throw 'The automatic installation state is invalid.' }
 } catch {
     $failure = $_

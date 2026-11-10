@@ -155,7 +155,7 @@ def test_cached_host_preparation_recovers_lost_permissions(tmp_path, monkeypatch
     assert calls == ([False] if missing else [])
 
 
-def test_ready_requires_observed_hardware_rendering(tmp_path):
+def test_ready_does_not_require_graphics_verification(tmp_path):
     from virtue.services import VMService
     from virtue.store import VMStore
 
@@ -163,13 +163,10 @@ def test_ready_requires_observed_hardware_rendering(tmp_path):
     config = VMConfig.new({"name": "Windows", "drivers_iso_path": str(tmp_path / "removed-virtio.iso")})
     store.save(config)
     (store.directory(config.id) / "virtue-setup.iso").write_bytes(b"media")
-    report = {"schema_version": 1, "opengl": {"renderer": "llvmpipe", "draw_test_passed": True}}
-    backend = SimpleNamespace(setup_status=lambda vm_id: {"state": "ready", "graphics_report": report})
+    backend = SimpleNamespace(setup_status=lambda vm_id: {"state": "ready"})
     service = VMService(store, backend=backend)
-    assert not service._reconcile_setup(config).installed
-    assert json.loads((store.directory(config.id) / "setup-progress.json").read_text())["state"] == "error"
-    report["opengl"]["renderer"] = "zink Vulkan (Virtio-GPU Venus (Intel Arc))"
     assert service._reconcile_setup(config).installed
+    assert json.loads((store.directory(config.id) / "setup-progress.json").read_text())["state"] == "ready"
     assert store.load(config.id).iso_path == ""
     assert store.load(config.id).drivers_iso_path == ""
 
