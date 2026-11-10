@@ -1,34 +1,6 @@
 name: Build Debian package
 
 on:
-  push:
-    paths:
-      - ".github/workflows/build-deb.yml"
-      - "pyproject.toml"
-      - "README.md"
-      - "LICENSE"
-      - "THIRD_PARTY.md"
-      - "src/**"
-      - "docs/**"
-      - "guest/**"
-      - "resources/**"
-      - "packaging/linux/**"
-      - "tools/build_deb.py"
-      - "tests/test_deb.py"
-  pull_request:
-    paths:
-      - ".github/workflows/build-deb.yml"
-      - "pyproject.toml"
-      - "README.md"
-      - "LICENSE"
-      - "THIRD_PARTY.md"
-      - "src/**"
-      - "docs/**"
-      - "guest/**"
-      - "resources/**"
-      - "packaging/linux/**"
-      - "tools/build_deb.py"
-      - "tests/test_deb.py"
   workflow_dispatch:
 
 permissions:
