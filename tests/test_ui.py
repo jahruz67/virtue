@@ -240,6 +240,29 @@ def test_presets_are_explicit_even_on_small_host(app):
     dialog.close()
 
 
+def test_automatic_defaults_and_advanced_override(app):
+    dialog = VMDialog({"memory_mib": 8192, "cpus": 4})
+    assert dialog.preset.currentText() == "Automatic"
+    assert dialog.advanced.isHidden()
+    assert dialog.options()["resource_mode"] == "automatic"
+    assert dialog.options()["memory_mib"] <= 8192 - 2048
+    dialog.advanced_toggle.setChecked(True)
+    dialog.memory.setValue(5)
+    assert dialog.preset.currentText() == "Custom"
+    assert dialog.options()["resource_mode"] == "manual"
+    dialog.close()
+
+
+def test_existing_manual_resources_are_preserved(app):
+    dialog = VMDialog(HOST, {**VM, "memory_mib": 12288, "cpus": 6, "disk_gib": 384})
+    assert dialog.options()["resource_mode"] == "manual"
+    assert dialog.options()["memory_mib"] == 12288
+    assert dialog.options()["cpus"] == 6
+    dialog.preset.setCurrentText("Automatic")
+    assert dialog.options()["disk_gib"] == 384
+    dialog.close()
+
+
 def test_installed_vm_can_drop_missing_installation_media(app):
     dialog = VMDialog(HOST, {**VM, "iso_path": "/media/removed/windows.iso"})
     dialog.validate()

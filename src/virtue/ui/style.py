@@ -42,11 +42,12 @@ QSpinBox::up-button, QSpinBox::down-button { width: 20px; }
 QCheckBox { spacing: 9px; background: transparent; border: 2px solid transparent; border-radius: 4px; padding: 2px; }
 QCheckBox::indicator { width: 17px; height: 17px; }
 QCheckBox:focus { border-color: #245edb; }
-QMenu { background: #ffffff; color: #202631; border: 1px solid #c6ced9; padding: 6px; }
+QMenu { background: #ffffff; color: #202631; border: 1px solid #c6ced9; padding: 6px; menu-scrollable: 1; }
 QMenu::item { padding: 8px 22px; border-radius: 4px; }
 QMenu::item:selected { background: #e8efff; color: #1949b2; }
 QMenu::item:disabled { color: #8b95a4; }
 QMenu::separator { height: 1px; background: #e3e7ed; margin: 5px 10px; }
+QMenu::scroller { height: 22px; }
 QScrollArea, QWidget#vmList { background: #f5f6f8; border: none; }
 QScrollBar:vertical { background: #f5f6f8; width: 10px; }
 QScrollBar::handle:vertical { background: #c0c8d4; border-radius: 5px; min-height: 30px; }

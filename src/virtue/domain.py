@@ -21,6 +21,14 @@ class ValidationError(ValueError):
     """An actionable invalid user setting."""
 
 
+def automatic_resources(host_memory_mib: int, host_cpus: int, other_memory_mib: int = 0) -> dict[str, int]:
+    """Choose a balanced boot allocation; validation rejects hosts below Windows minimums."""
+    available = host_memory_mib - max(2048, host_memory_mib // 5) - other_memory_mib
+    memory = max(4096, min(8192, available // 1024 * 1024)) if host_memory_mib else 8192
+    cpus = min(4, max(2, host_cpus - 1)) if host_cpus else 4
+    return {"memory_mib": memory, "cpus": cpus}
+
+
 def valid_id(value: str) -> bool:
     return isinstance(value, str) and bool(re.fullmatch(r"[a-f0-9]{32}", value))
 
@@ -47,6 +55,7 @@ class VMConfig:
     machine_type: str = "q35"
     hyperv: bool = True
     schema_version: int = 1
+    resource_mode: str = "manual"
 
     def __post_init__(self) -> None:
         if not self.created_at:
@@ -73,6 +82,7 @@ class VMConfig:
     @classmethod
     def new(cls, options: dict[str, Any]) -> "VMConfig":
         data = dict(options)
+        data.setdefault("resource_mode", "manual" if {"memory_mib", "cpus", "disk_gib"} & data.keys() else "automatic")
         for key in ("id", "schema_version", "created_at", "graphics_consent"):
             data.pop(key, None)
         data["graphics"] = "yttrium"
@@ -93,6 +103,8 @@ class VMConfig:
             raise ValidationError("This VM uses an unsupported configuration version.")
         if self.windows_version not in ("11", "10"):
             raise ValidationError("Only Windows 11 and Windows 10 x64 guests are supported.")
+        if self.resource_mode not in ("automatic", "manual"):
+            raise ValidationError("Choose automatic or manual resources.")
         for key in ("memory_mib", "cpus", "disk_gib"):
             if type(getattr(self, key)) is not int:
                 raise ValidationError(f"{key} must be a whole number.")

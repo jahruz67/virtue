@@ -11,7 +11,7 @@ import threading
 import time
 
 from .backup import export_backup, import_backup
-from .domain import VMConfig, ValidationError
+from .domain import VMConfig, ValidationError, automatic_resources
 from .store import VMStore, atomic_json
 
 
@@ -66,14 +66,20 @@ class VMService:
             raise ValidationError("Shut down Windows completely before changing disks, firmware, or VM settings. "
                                   f"Current state: {state}.")
 
-    def _validate_resources(self, config: VMConfig, *, starting: bool = False) -> None:
+    def _configure_resources(self, config: VMConfig, *, starting: bool = False, check_media: bool = True) -> VMConfig:
         other_memory = 0
         if starting:
             for other in self.store.list():
-                if other.id != config.id and self.backend.status(other.id).get("state") in {"running", "paused", "starting"}:
+                if other.id == config.id:
+                    continue
+                status = self.backend.status(other.id)
+                if status.get("process_active") or status.get("state") in {"running", "paused", "starting", "shutdown"}:
                     other_memory += other.memory_mib
+        if config.resource_mode == "automatic":
+            config = replace(config, **automatic_resources(self.host.memory_mib, self.host.cpus, other_memory))
         config.validate(host_memory_mib=self.host.memory_mib, host_cpus=self.host.cpus,
-                        check_media=True, other_memory_mib=other_memory)
+                        check_media=check_media, other_memory_mib=other_memory)
+        return config
 
     @staticmethod
     def _setup_progress(directory: Path) -> dict:
@@ -155,7 +161,7 @@ class VMService:
         assets = self.prepare_host(progress)
         with self.store.transaction():
             config = VMConfig.new(options)
-            self._validate_resources(config)
+            config = self._configure_resources(config, starting=True)
             self.backend.create(config)
             self.store.save(config)
             try:
@@ -188,6 +194,7 @@ class VMService:
                 return result
             if state == "stopped":
                 from .provisioning import prepare_windows
+                config = self._configure_resources(config, starting=True)
                 prepare_windows(config, self.store.directory(vm_id), assets, progress)
                 self.store.save(config)
                 return self.backend.start(config)
@@ -210,6 +217,8 @@ class VMService:
                     config = replace(config, drivers_iso_path=str(drivers_iso))
                     self.store.save(config)
                 progress("Starting your existing Windows installation for repair…")
+                config = self._configure_resources(config, starting=True, check_media=False)
+                self.store.save(config)
                 self.backend.start(config)
             elif state == "paused":
                 progress("Resuming Windows for setup repair…")
@@ -236,14 +245,15 @@ class VMService:
 
     def update_vm(self, vm_id: str, options: dict) -> dict:
         allowed = {"name", "memory_mib", "cpus", "disk_gib", "installed", "iso_path",
-                   "drivers_iso_path", "storage_bus", "virtio_network", "hyperv"}
+                   "drivers_iso_path", "storage_bus", "virtio_network", "hyperv", "resource_mode"}
         if set(options) - allowed:
             raise ValidationError("These settings require the dedicated graphics or storage workflow.")
         with self.store.transaction():
             current = self.store.load(vm_id)
             self._require_stopped(current)
-            config = replace(current, **options)
-            self._validate_resources(config)
+            if "resource_mode" not in options and {"memory_mib", "cpus"} & options.keys():
+                options = {**options, "resource_mode": "manual"}
+            config = self._configure_resources(replace(current, **options))
             if config.disk_gib < current.disk_gib:
                 raise ValidationError("Disks can be expanded but never shrunk.")
             if config.disk_gib > current.disk_gib:
@@ -254,8 +264,10 @@ class VMService:
     def start_vm(self, vm_id: str, safe_graphics: bool = False):
         with self.store.transaction():
             config = self.store.load(vm_id)
-            self._validate_resources(config, starting=True)
+            self._require_stopped(config)
+            config = self._configure_resources(config, starting=True)
             self._check_standalone_disk(self.store.directory(vm_id) / "disk.qcow2")
+            self.store.save(config)
             return self.backend.start(config, safe_graphics=safe_graphics)
 
     def _lifecycle(self, vm_id: str, operation: str):

@@ -75,6 +75,13 @@ retain your Windows BitLocker recovery key separately.
 
 ## Data and lifecycle
 
+New VMs use **Automatic** resources: memory and CPU limits are chosen before a
+cold start, leaving at least 2 GiB (or 20%) of RAM for Linux and accounting for
+other active Virtue VMs. Manual settings are under **Resources → Advanced**.
+Existing VMs keep their saved allocations until Automatic is selected. This
+does not resize RAM while Windows is running; virtual disks still grow as needed
+up to their configured capacity.
+
 VMs live in `$XDG_DATA_HOME/virtue/vms` (normally
 `~/.local/share/virtue/vms`). Set `--data-dir /absolute/path` to use another root.
 Closing Virtue leaves Windows running; reopen Virtue to reconnect. **Shut down**

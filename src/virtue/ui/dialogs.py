@@ -8,10 +8,11 @@ from PySide6.QtGui import QPainter, QPalette
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLayout, QLineEdit, QScrollArea, QSpinBox, QTabWidget,
-    QSizePolicy, QTextBrowser, QVBoxLayout, QWidget,
+    QSizePolicy, QTextBrowser, QToolButton, QVBoxLayout, QWidget,
 )
 
 from .icons import icon_button
+from ..domain import automatic_resources
 
 
 PRESETS = {
@@ -96,6 +97,7 @@ class VMDialog(QDialog):
     def __init__(self, host: dict, vm: dict | None = None, parent=None):
         super().__init__(parent)
         self.vm = vm
+        self.host = host
         vm = vm or {}
         self.setWindowTitle("Settings" if self.vm else "New Windows")
         self.setMinimumSize(420, 320)
@@ -156,37 +158,55 @@ class VMDialog(QDialog):
         form2.setContentsMargins(20, 20, 20, 20)
         form2.setSpacing(14)
         self.preset = QComboBox()
-        self.preset.addItems([*PRESETS, "Custom"])
+        self.preset.addItems(["Automatic", *PRESETS, "Custom"])
         self.memory = QSpinBox()
-        self.memory.setRange(4, 1048576)
+        self.memory.setRange(4, 1024)
         self.memory.setSuffix(" GiB")
         self.cpus = QSpinBox()
-        self.cpus.setRange(2, 1024)
+        self.cpus.setRange(2, 512)
         self.cpus.setSuffix(" vCPUs")
         self.disk = QSpinBox()
-        self.disk.setRange(64, 1048576)
+        self.disk.setRange(64, 65536)
         self.disk.setSuffix(" GiB")
-        host_memory = host.get("memory_mib", 16384)
-        recommended_memory = min(8192, max(4096, host_memory - max(2048, host_memory // 5)))
-        self.memory.setValue(max(4, int(vm.get("memory_mib", recommended_memory)) // 1024))
-        self.cpus.setValue(int(vm.get("cpus", min(4, max(2, host.get("cpus", 8) - 1)))))
+        automatic = automatic_resources(host.get("memory_mib", 0), host.get("cpus", 0))
+        self.memory.setValue(max(4, int(vm.get("memory_mib", automatic["memory_mib"])) // 1024))
+        self.cpus.setValue(int(vm.get("cpus", automatic["cpus"])))
         self.disk.setValue(int(vm.get("disk_gib", 128)))
         self.disk.setEnabled(not bool(self.vm))
-        form2.addRow("Preset", self.preset)
-        form2.addRow("Memory", self.memory)
-        form2.addRow("CPUs", self.cpus)
-        form2.addRow("Disk limit", self.disk)
+        form2.addRow("Mode", self.preset)
+        self.automatic_note = label("Chosen at start. Keeps resources for Linux.", "muted", True)
+        form2.addRow(self.automatic_note)
+        self.advanced_toggle = QToolButton()
+        self.advanced_toggle.setText("Advanced")
+        self.advanced_toggle.setCheckable(True)
+        self.advanced_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.advanced_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.advanced_toggle.setAccessibleName("Advanced resource settings")
+        form2.addRow(self.advanced_toggle)
+        self.advanced = QWidget()
+        advanced_form = QFormLayout(self.advanced)
+        advanced_form.setContentsMargins(0, 12, 0, 0)
+        advanced_form.setSpacing(14)
+        advanced_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        advanced_form.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        advanced_form.addRow("Memory", self.memory)
+        advanced_form.addRow("CPUs", self.cpus)
+        advanced_form.addRow("Disk limit", self.disk)
         total_mem = host.get("memory_mib", 0) / 1024
-        form2.addRow(label(f"Host: {total_mem:g} GiB · {host.get('cpus', '?')} CPUs", "muted", True))
+        advanced_form.addRow(label(f"Host: {total_mem:g} GiB · {host.get('cpus', '?')} CPUs", "muted", True))
         self.preset_note = label("Disk space grows as needed.", "muted", True)
-        form2.addRow(self.preset_note)
+        advanced_form.addRow(self.preset_note)
         self.cad_note = label("Large CAD assemblies may need more memory. Compatibility is not certified.", "muted", True)
         self.cad_note.hide()
-        form2.addRow(self.cad_note)
+        advanced_form.addRow(self.cad_note)
         if self.vm:
-            form2.addRow(label("To increase capacity, use ⋯ → Expand disk, then Windows Disk Management.", "muted", True))
+            advanced_form.addRow(label("To increase capacity, use ⋯ → Expand disk, then Windows Disk Management.", "muted", True))
+        form2.addRow(self.advanced)
+        self.advanced_toggle.toggled.connect(self.show_advanced)
+        self.preset.setCurrentText("Automatic" if not self.vm or vm.get("resource_mode") == "automatic" else "Custom")
         self.preset.currentTextChanged.connect(self.apply_preset)
-        self.preset.setCurrentText("Custom")
+        self.apply_preset(self.preset.currentText())
+        self.show_advanced(self.advanced_toggle.isChecked())
         for spin in (self.memory, self.cpus, self.disk):
             spin.valueChanged.connect(self.mark_custom)
         form3 = QFormLayout(devices)
@@ -216,21 +236,32 @@ class VMDialog(QDialog):
 
     def mark_custom(self):
         values = (self.memory.value(), self.cpus.value(), self.disk.value())
-        if self.preset.currentText() in PRESETS and values != PRESETS[self.preset.currentText()]:
-            self.preset.blockSignals(True)
+        preset = self.preset_values(self.preset.currentText())
+        if preset is not None and values != preset:
             self.preset.setCurrentText("Custom")
-            self.preset.blockSignals(False)
+
+    def show_advanced(self, checked):
+        self.advanced.setVisible(checked)
+        self.advanced_toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+
+    def preset_values(self, name):
+        if name == "Automatic":
+            values = automatic_resources(self.host.get("memory_mib", 0), self.host.get("cpus", 0))
+            return values["memory_mib"] // 1024, values["cpus"], self.disk.value() if self.vm else 128
+        return PRESETS.get(name)
 
     def apply_preset(self, name):
         self.cad_note.setVisible(name == "CAD / Engineering")
-        if name not in PRESETS:
+        self.automatic_note.setVisible(name == "Automatic")
+        self.advanced_toggle.setChecked(name != "Automatic")
+        values = self.preset_values(name)
+        if values is None:
             return
-        values = PRESETS[name]
         for spin, value in zip((self.memory, self.cpus, self.disk), values):
             if spin.isEnabled():
-                spin.blockSignals(True)
+                blocked = spin.blockSignals(True)
                 spin.setValue(value)
-                spin.blockSignals(False)
+                spin.blockSignals(blocked)
 
     def validate(self):
         reason = None
@@ -257,6 +288,7 @@ class VMDialog(QDialog):
             "iso_path": "" if self.installed.isChecked() else self.iso.text(),
             "drivers_iso_path": self.drivers.text(),
             "memory_mib": self.memory.value() * 1024,
+            "resource_mode": "automatic" if self.preset.currentText() == "Automatic" else "manual",
             "cpus": self.cpus.value(),
             "disk_gib": self.disk.value(),
             "installed": self.installed.isChecked(),

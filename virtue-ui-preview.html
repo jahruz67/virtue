@@ -80,9 +80,9 @@ h3{font-size:17px;margin:20px 0 10px}
 .setup p{margin:6px 0 0;line-height:1.5}
 .setup-buttons{display:flex;gap:8px;margin-top:10px}
 .setup-buttons button{font-size:12px;padding:6px 10px}
-.popup{position:fixed;z-index:20;background:#fff;border:1px solid #c6ced9;padding:6px;border-radius:7px;box-shadow:0 10px 28px #25354c26;min-width:260px;max-height:calc(100vh - 24px);overflow:auto}
+.popup{position:fixed;inset:auto;margin:0;z-index:1000;background:#fff;border:1px solid #c6ced9;padding:6px;border-radius:7px;box-shadow:0 10px 28px #25354c26;min-width:min(260px,calc(100vw - 16px));max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable}
 .popup[hidden]{display:none}
-.popup button{display:block;background:transparent;border:0;border-radius:4px;text-align:left;width:100%;padding:8px 22px;font-weight:400}
+.popup button{display:block;background:transparent;border:0;border-radius:4px;text-align:left;width:100%;padding:8px 22px;font-weight:400;white-space:normal;overflow-wrap:anywhere}
 .popup button:hover:not(:disabled){background:#e8efff;color:#1949b2}
 .popup button:disabled{color:#8b95a4}
 .popup hr{border:0;border-top:1px solid #e3e7ed;margin:6px 12px}
@@ -104,6 +104,8 @@ dialog.wide{width:780px}
 .file-field{display:flex;gap:8px;align-items:center}
 .file-field input{width:100%}
 .form-note{color:var(--muted);line-height:1.6}
+.advanced-resources>summary{cursor:pointer;width:fit-content;padding:8px 13px;background:#fff;border:1px solid #b8c2cf;border-radius:6px;font-weight:600}
+.advanced-fields{padding-top:20px}
 .check{display:flex;gap:9px;align-items:center;margin:16px 0}
 .dialog-body .form-note:last-child{margin-bottom:0}
 .error{color:#b42332;margin:16px 0 0}
@@ -195,7 +197,7 @@ pre{margin:0;white-space:pre-wrap;font:13px/1.75 Consolas,monospace;color:#3c4a5
     </svg>
   </div>
 </section>
-<div id="popup" class="popup" role="menu" hidden></div>
+<div id="popup" class="popup" role="menu" aria-label="Actions" popover="manual" hidden></div>
 <dialog id="modal" aria-labelledby="modal-title"><div class="dialog-title"><span id="modal-title"></span><button id="close-dialog" aria-label="Close dialog"><svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-close"/></svg></button></div><div class="dialog-body" id="modal-body"></div><div class="dialog-footer" id="modal-footer"></div></dialog>
 <script>
 'use strict';
@@ -209,7 +211,7 @@ const runningStates = ['running','safe','install0','install1','install2','starti
 const installationRunning = () => ['install0','install1','install2','starting','shutdown'].includes(state);
 const isActive = () => runningStates.includes(state) || ['paused','setupPaused'].includes(state);
 const isLegacy = () => state === 'legacy';
-function closeMenu(){popup.hidden=true;if(menuAnchor)menuAnchor.setAttribute('aria-expanded','false');menuAnchor=null;}
+function closeMenu(){if(typeof popup.hidePopover==='function'&&popup.matches(':popover-open'))popup.hidePopover();popup.hidden=true;if(menuAnchor)menuAnchor.setAttribute('aria-expanded','false');menuAnchor=null;}
 function closeDialog(){modal.close();$('screen-picker').value='';returnTo='';}
 function renderWorkspace(){
   closeMenu();
@@ -254,14 +256,42 @@ const manageItems = () => {
   ];
 };
 function showMenu(kind,anchor){
-  closeMenu();menuAnchor=anchor;anchor.setAttribute('aria-expanded','true');
+  closeMenu();menuAnchor=anchor;anchor.setAttribute('aria-expanded','true');anchor.setAttribute('aria-controls',popup.id);
+  popup.setAttribute('aria-label',anchor.getAttribute('aria-label')||anchor.textContent.trim()||'Actions');
   const items = kind === 'help' ? [['Setup guide','guide',true],['Display shortcuts','display-help',true],['Open guides','support',true]] : kind === 'vm-machine' ? [['Pause','pause-action',true],['Reset','restart',true],['Power Down','shutdown-action',true]] : kind === 'vm-view' ? [['Fullscreen · Ctrl+Alt+F','display-help',true],['Zoom To Fit','display-help',true],['Grab Input · Ctrl+Alt+G','display-help',true],['Show Menubar · Ctrl+Alt+M','vm-window',true]] : manageItems();
   popup.innerHTML = items.map(item=>item?`<button role="menuitem" data-screen="${item[1]}" ${item[2]?'':'disabled'}>${item[0]}</button>`:'<hr role="separator">').join('');
   popup.hidden=false;
-  const r=anchor.getBoundingClientRect();
-  popup.style.left=Math.max(12,Math.min(r.right-popup.offsetWidth,innerWidth-popup.offsetWidth-12))+'px';
-  popup.style.top=Math.max(12,Math.min(r.bottom+6,innerHeight-popup.offsetHeight-12))+'px';
-  const first=popup.querySelector('button:not(:disabled)');if(first)first.focus();
+  if(typeof popup.showPopover==='function')popup.showPopover();
+  popup.scrollTop=0;
+  positionMenu();
+  const first=popup.querySelector('button:not(:disabled)');if(first)focusMenuItem(first);
+}
+function positionMenu(){
+  if(popup.hidden||!menuAnchor)return;
+  if(!menuAnchor.isConnected){closeMenu();return;}
+  const viewport=window.visualViewport;
+  const left=(viewport?.offsetLeft??0)+8,top=(viewport?.offsetTop??0)+8;
+  const width=Math.max(1,(viewport?.width??innerWidth)-16);
+  const height=Math.max(1,(viewport?.height??innerHeight)-16);
+  popup.style.minWidth=Math.min(260,width)+'px';
+  popup.style.maxWidth=width+'px';
+  popup.style.maxHeight=height+'px';
+  const r=menuAnchor.getBoundingClientRect();
+  const menuWidth=popup.offsetWidth,menuHeight=popup.offsetHeight;
+  const below=r.bottom+6,above=r.top-menuHeight-6;
+  const y=below+menuHeight<=top+height?below:above>=top?above:top;
+  popup.style.left=Math.max(left,Math.min(r.right-menuWidth,left+width-menuWidth))+'px';
+  popup.style.top=Math.max(top,Math.min(y,top+height-menuHeight))+'px';
+  if(popup.contains(document.activeElement))revealMenuItem(document.activeElement);
+}
+function revealMenuItem(item){
+  const top=item.offsetTop,bottom=top+item.offsetHeight;
+  if(top<popup.scrollTop+6)popup.scrollTop=Math.max(0,top-6);
+  else if(bottom>popup.scrollTop+popup.clientHeight-6)popup.scrollTop=bottom-popup.clientHeight+6;
+}
+function focusMenuItem(item){
+  item.focus({preventScroll:true});
+  revealMenuItem(item);
 }
 function dialog(title,body,actions,wide=false){
   closeMenu();$('modal-title').textContent=title;$('modal-body').innerHTML=body;$('modal-footer').innerHTML=actions||'<button data-close>Close</button>';modal.classList.toggle('wide',wide);if(!modal.open)modal.showModal();
@@ -284,13 +314,16 @@ function showVMDialog(edit=false,tab='media',error=false){
       ${edit&&legacy?'<label class="check"><input type="checkbox" checked>Installation complete</label><p class="form-note">Windows 10 is legacy. Windows 11 recommended.</p>':''}
     </div>
     <div class="tab-panel" id="panel-resources" role="tabpanel" aria-labelledby="tab-resources" data-panel="resources" hidden>
-      <div class="form-row"><label for="preset">Preset</label><select id="preset"><option>Light</option><option>Balanced</option><option>High Performance</option><option>CAD / Engineering</option><option selected>Custom</option></select></div>
-      <div class="form-row"><label for="memory">Memory</label><div class="file-field"><input id="memory" type="number" min="4" max="1048576" value="8" aria-label="Memory in GiB"><span class="muted">GiB</span></div></div>
-      <div class="form-row"><label for="cpus">CPUs</label><div class="file-field"><input id="cpus" type="number" min="2" max="1024" value="4" aria-label="Virtual CPU count"><span class="muted">vCPUs</span></div></div>
-      <div class="form-row"><label for="disk">Disk limit</label><div class="file-field"><input id="disk" type="number" min="64" max="1048576" value="128" ${edit?'disabled':''} aria-label="Disk capacity in GiB"><span class="muted">GiB</span></div></div>
+      <div class="form-row"><label for="preset">Mode</label><select id="preset"><option ${edit?'':'selected'}>Automatic</option><option>Light</option><option>Balanced</option><option>High Performance</option><option>CAD / Engineering</option><option ${edit?'selected':''}>Custom</option></select></div>
+      <p id="automatic-note" class="form-note" ${edit?'hidden':''}>Chosen at start. Keeps resources for Linux.</p>
+      <details class="advanced-resources" id="advanced-resources" ${edit?'open':''}><summary>Advanced</summary><div class="advanced-fields">
+      <div class="form-row"><label for="memory">Memory</label><div class="file-field"><input id="memory" type="number" min="4" max="1024" value="8" aria-label="Memory in GiB"><span class="muted">GiB</span></div></div>
+      <div class="form-row"><label for="cpus">CPUs</label><div class="file-field"><input id="cpus" type="number" min="2" max="512" value="4" aria-label="Virtual CPU count"><span class="muted">vCPUs</span></div></div>
+      <div class="form-row"><label for="disk">Disk limit</label><div class="file-field"><input id="disk" type="number" min="64" max="65536" value="128" ${edit?'disabled':''} aria-label="Disk capacity in GiB"><span class="muted">GiB</span></div></div>
       <p class="form-note">Host: 32 GiB · 12 CPUs</p><p class="form-note">Disk space grows as needed.</p>
       <p id="cad-note" class="form-note" hidden>Large CAD assemblies may need more memory. Compatibility is not certified.</p>
       ${edit?'<p class="form-note">To increase capacity, use ⋯ → Expand disk, then Windows Disk Management.</p>':''}
+      </div></details>
     </div>
     <div class="tab-panel" id="panel-features" role="tabpanel" aria-labelledby="tab-features" data-panel="features" hidden><p class="form-note">Included automatically:<br>Graphics · Vulkan · Network · Sound<br>UEFI · TPM · Drivers · Guest agent</p><p class="form-note">Guest test signing enabled; Secure Boot disabled. Hardware rendering is verified during setup.</p></div>
     <p class="error" id="validation-error" ${error?'':'hidden'}>Choose your Windows installation ISO.</p>`,
@@ -373,29 +406,41 @@ document.addEventListener('click',event=>{
   if(!popup.contains(target))closeMenu();
 });
 function restoreMediaForm(dest){const saved={name:modal.dataset.savedName,iso:modal.dataset.savedIso,drivers:modal.dataset.savedDrivers};openScreen(dest);$('vm-name').value=saved.name;$('vm-iso').value=saved.iso;if($('vm-drivers'))$('vm-drivers').value=saved.drivers;}
+document.addEventListener('focusin',event=>{if(!popup.hidden&&!popup.contains(event.target)&&event.target!==menuAnchor)closeMenu();});
 document.addEventListener('change',event=>{
   if(event.target.id==='workspace-state'){if(modal.open)closeDialog();state=event.target.value;$('screen-picker').value='';renderWorkspace();}
   if(event.target.id==='screen-picker'){returnTo='';openScreen(event.target.value);}
   if(event.target.id==='preset'){
-    const values={'Light':[4,2,64],'Balanced':[8,4,128],'High Performance':[16,8,256],'CAD / Engineering':[16,8,256]}[event.target.value];
+    const values={'Automatic':[8,4,128],'Light':[4,2,64],'Balanced':[8,4,128],'High Performance':[16,8,256],'CAD / Engineering':[16,8,256]}[event.target.value];
+    $('automatic-note').hidden=event.target.value!=='Automatic';
+    $('advanced-resources').open=event.target.value!=='Automatic';
     $('cad-note').hidden=event.target.value!=='CAD / Engineering';
     if(values)['memory','cpus','disk'].forEach((key,i)=>{if(!$(key).disabled)$(key).value=values[i];});
   }
-  if(['memory','cpus','disk'].includes(event.target.id)){$('preset').value='Custom';$('cad-note').hidden=true;}
+  if(['memory','cpus','disk'].includes(event.target.id)){$('preset').value='Custom';$('cad-note').hidden=true;$('automatic-note').hidden=true;}
 });
 document.addEventListener('keydown',event=>{
   if(!$('vm-window').hidden&&!modal.open&&event.ctrlKey&&event.altKey&&event.key.toLowerCase()==='m'){event.preventDefault();closeMenu();$('vm-controls').hidden=!$('vm-controls').hidden;return;}
   if(event.key==='Escape'&&!popup.hidden){event.preventDefault();const anchor=menuAnchor;closeMenu();if(anchor)anchor.focus();}
-  else if(!popup.hidden&&['ArrowDown','ArrowUp','Home','End'].includes(event.key)){
-    event.preventDefault();const items=[...popup.querySelectorAll('button:not(:disabled)')];let i=items.indexOf(document.activeElement);i=event.key==='Home'?0:event.key==='End'?items.length-1:(i+(event.key==='ArrowDown'?1:-1)+items.length)%items.length;items[i].focus();
+  else if(!popup.hidden&&['ArrowDown','ArrowUp','Home','End','PageDown','PageUp'].includes(event.key)){
+    event.preventDefault();const items=[...popup.querySelectorAll('button:not(:disabled)')];if(!items.length)return;
+    let i=items.indexOf(document.activeElement);
+    const page=Math.max(1,Math.floor(popup.clientHeight/items[0].offsetHeight)-1);
+    if(event.key==='Home')i=0;
+    else if(event.key==='End')i=items.length-1;
+    else if(event.key==='PageDown'||event.key==='PageUp')i=Math.max(0,Math.min(items.length-1,i+(event.key==='PageDown'?page:-page)));
+    else i=(i+(event.key==='ArrowDown'?1:-1)+items.length)%items.length;
+    focusMenuItem(items[i]);
   }
   if(event.target.matches('[role=tab]')&&['ArrowRight','ArrowLeft'].includes(event.key)){event.preventDefault();const tabs=[...modal.querySelectorAll('[role=tab]')];const i=(tabs.indexOf(event.target)+(event.key==='ArrowRight'?1:2))%3;showTab(tabs[i].dataset.tab);tabs[i].focus();}
 });
 modal.addEventListener('close',()=>{$('screen-picker').value='';returnTo='';});
-window.addEventListener('resize',closeMenu);
-window.addEventListener('scroll',closeMenu);
-$('cards').addEventListener('scroll',closeMenu);
-const frameObserver=new ResizeObserver(closeMenu);
+window.addEventListener('resize',positionMenu);
+window.addEventListener('scroll',positionMenu);
+$('cards').addEventListener('scroll',positionMenu);
+window.visualViewport?.addEventListener('resize',positionMenu);
+window.visualViewport?.addEventListener('scroll',positionMenu);
+const frameObserver=new ResizeObserver(positionMenu);
 document.querySelectorAll('.shell').forEach(frame=>frameObserver.observe(frame));
 renderWorkspace();
 </script>
