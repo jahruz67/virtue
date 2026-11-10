@@ -3,7 +3,8 @@
 Every push to `main` runs **Build and release**. The Linux job runs the existing
 checks and builds the amd64 DEB, x86_64 RPM, Python wheel and source archive. The
 Mac job runs on Apple Silicon, prepares its native runtime automatically, and
-packages `Virtue.app` as `Virtue-macos-arm64.zip`. No runtime upload, workflow
+packages `Virtue.app` as `Virtue-macos-arm64.dmg` with an Applications shortcut.
+Open the disk image and drag Virtue to Applications. No runtime upload, workflow
 inputs, repository variables or extra GitHub token are required.
 
 After both jobs succeed, the workflow verifies the package checksums, uploads all

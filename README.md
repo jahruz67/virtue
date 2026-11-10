@@ -36,7 +36,7 @@ native DEB packaging, headless diagnostics, and reproducible builds.
 
 Each push to `main` is configured to publish a GitHub prerelease after the Linux
 and Mac builds succeed, containing an amd64 DEB for Ubuntu/Debian, an x86_64 RPM
-for Fedora, and an Apple Silicon `Virtue.app` ZIP, with SHA-256 checksums.
+for Fedora, and an Apple Silicon macOS DMG, with SHA-256 checksums.
 Open the downloaded Linux package in the desktop's
 software installer. The RPM uses Fedora's
 system Python and PySide6. These remain engineering previews requiring target-host

@@ -95,7 +95,7 @@ jobs:
             RELEASE_TAG="build-$GITHUB_SHA"
           fi
           assets=(dist/*.whl dist/*.tar.gz dist/*.deb dist/*.deb.sha256 dist/*.rpm dist/*.rpm.sha256
-            dist/macos/Virtue-macos-arm64.zip dist/macos/Virtue-macos-arm64.zip.sha256
+            dist/macos/Virtue-macos-arm64.dmg dist/macos/Virtue-macos-arm64.dmg.sha256
             dist/macos/Virtue-macos-runtime-sources.tar.gz dist/macos/Virtue-macos-runtime-sources.tar.gz.sha256)
           for asset in "${assets[@]}"; do
             test -f "$asset" || { echo "Missing release asset: $asset" >&2; exit 1; }

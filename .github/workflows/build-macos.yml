@@ -80,12 +80,17 @@ jobs:
             --runtime "$RUNNER_TEMP/virtue-macos-runtime" \
             --output dist/macos
 
-      - name: Archive application with executable permissions
+      - name: Create Mac disk image
         working-directory: dist/macos
         run: |
-          /usr/bin/ditto -c -k --keepParent Virtue.app Virtue-macos-arm64.zip
+          staging="$RUNNER_TEMP/virtue-dmg"
+          mkdir -p "$staging"
+          /usr/bin/ditto Virtue.app "$staging/Virtue.app"
+          ln -s /Applications "$staging/Applications"
+          /usr/bin/hdiutil create -volname Virtue -srcfolder "$staging" \
+            -fs HFS+ -format UDZO Virtue-macos-arm64.dmg
           cp "$RUNNER_TEMP/Virtue-macos-runtime-sources.tar.gz" .
-          /usr/bin/shasum -a 256 Virtue-macos-arm64.zip > Virtue-macos-arm64.zip.sha256
+          /usr/bin/shasum -a 256 Virtue-macos-arm64.dmg > Virtue-macos-arm64.dmg.sha256
           /usr/bin/shasum -a 256 Virtue-macos-runtime-sources.tar.gz > Virtue-macos-runtime-sources.tar.gz.sha256
 
       - name: Upload Mac application and checksum
@@ -93,8 +98,8 @@ jobs:
         with:
           name: virtue-macos-arm64
           path: |
-            dist/macos/Virtue-macos-arm64.zip
-            dist/macos/Virtue-macos-arm64.zip.sha256
+            dist/macos/Virtue-macos-arm64.dmg
+            dist/macos/Virtue-macos-arm64.dmg.sha256
             dist/macos/Virtue-macos-runtime-sources.tar.gz
             dist/macos/Virtue-macos-runtime-sources.tar.gz.sha256
           if-no-files-found: error

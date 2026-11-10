@@ -83,8 +83,9 @@ source archive are cached for subsequent app builds. No prepared runtime or
 manual workflow inputs are needed.
 
 The workflow builds an ad-hoc-signed engineering app and uploads
-`Virtue-macos-arm64.zip`, the runtime source archive and their checksums. The
-calling release workflow waits for this build and the Linux job, then publishes
+`Virtue-macos-arm64.dmg`, the runtime source archive and their checksums. The disk
+image contains `Virtue.app` and an Applications shortcut for drag-and-drop
+installation. The calling release workflow waits for this build and the Linux job, then publishes
 the packages together after a push to `main` or a `v*` tag. It does not launch
 the Mac app or VM, notarize, or establish workload compatibility. This build
 recipe has not been executed on a Mac here. It currently targets macOS 26+.
