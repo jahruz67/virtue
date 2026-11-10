@@ -48,18 +48,30 @@ validation; macOS packages are not provided.
 
 No driver downloads, guest terminal commands, manual firmware changes, optional
 graphics toggle or manual installation-complete checkbox are part of this flow.
+
+New installations also remove OneDrive through its registered Microsoft uninstaller
+(unless an account or folder backup needs attention), uninstall a fixed list of optional apps
+using Windows package management, reduce desktop animations, and turn off Edge
+startup boost and background apps by default. Edge preferences remain changeable.
+Store, App Installer, security, updates, font smoothing, and graphics acceleration
+are preserved. GPU scheduling stays at the driver default; it is not a guaranteed
+performance improvement for a virtual GPU. Optional cleanup failures do not block
+setup and are recorded in `C:\ProgramData\Virtue\windows-optimization.json`.
+Repairing an existing installation does not opt it into this cleanup.
 Use **Retry / repair setup** or **Retry automatic setup** if setup reports a failure.
 
 Windows remains a separately managed guest. Fullscreen, scaling, keyboard/mouse
 capture and audio use QEMU GTK. **Settings → Display** saves startup fullscreen,
-the monitor to match, relative mouse capture for CAD/games and optional keyboard
-capture on hover. **Start fullscreen** is also available in the Windows menu.
+the monitor to match, relative mouse capture for CAD/games and automatic keyboard
+capture on hover in windowed mode (enabled by default). **Start fullscreen** is also
+available in the Windows menu and always enables input capture.
 The guest requests the selected monitor's physical resolution and chooses the
 closest supported refresh rate after sign-in; unsupported modes leave its current
 display intact. Windows DPI is preserved. The desktop chooses the VM window's
-placement, so move it to the matching monitor if needed. Menus are visible initially;
+placement, so move it to the matching monitor if needed. The viewer menu bar is hidden;
 Ctrl+Alt+M toggles the controls, Ctrl+Alt+F toggles fullscreen, and Ctrl+Alt+G releases
-input. GTK uses its normal desktop/Flatpak theme selection. F11 toggles Virtue's own fullscreen; Escape exits
+input to Linux. While captured, the Windows key and Alt+Tab control Windows.
+GTK uses its normal desktop/Flatpak theme selection. F11 toggles Virtue's own fullscreen; Escape exits
 it. Virtue remembers its window geometry and fullscreen state.
 **Host diagnostics** distinguishes the requested monitor mode from the confirmed
 Windows mode. Existing managed guests receive display integration automatically

@@ -60,7 +60,7 @@ class VMConfig:
     match_host_display: bool = True
     display_monitor: str = ""
     relative_mouse: bool = False
-    grab_on_hover: bool = False
+    grab_on_hover: bool = True
     solidworks_compatibility: bool = False
 
     def __post_init__(self) -> None:

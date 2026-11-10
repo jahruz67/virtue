@@ -271,15 +271,17 @@ class VMDialog(QDialog):
         self.relative_mouse = QCheckBox("Capture mouse for CAD and games")
         self.relative_mouse.setToolTip("Use relative mouse movement. Ctrl+Alt+G releases captured input.")
         self.relative_mouse.setChecked(vm.get("relative_mouse", False))
-        self.grab_on_hover = QCheckBox("Capture keyboard on pointer entry")
-        self.grab_on_hover.setChecked(vm.get("grab_on_hover", False))
+        self.grab_on_hover = QCheckBox("Capture keyboard on pointer entry in windowed mode")
+        self.grab_on_hover.setToolTip("Fullscreen captures input automatically. Ctrl+Alt+G returns input to Linux.")
+        self.grab_on_hover.setChecked(vm.get("grab_on_hover", True))
         form.addRow(self.start_fullscreen)
         form.addRow(self.match_host_display)
         form.addRow("Match monitor", self.display_monitor)
         form.addRow(self.relative_mouse)
         form.addRow(self.grab_on_hover)
-        form.addRow(label("Ctrl+Alt+F toggles VM fullscreen. Ctrl+Alt+G releases captured input. "
-                          "Ctrl+Alt+M shows or hides the viewer controls. Display preferences apply at the next start. "
+        form.addRow(label("In the Windows window, Ctrl+Alt+F enters fullscreen; press it again to exit. "
+                          "Ctrl+Alt+G returns captured input to Linux. "
+                          "Viewer controls are hidden; Ctrl+Alt+M shows or hides them. Display preferences apply at the next start. "
                           "The desktop chooses where the VM window opens; move it to the matching monitor if needed.", "muted", True))
 
     def mark_custom(self):

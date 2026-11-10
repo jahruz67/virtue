@@ -1,6 +1,6 @@
 # Mac plan — Virtue macOS feature parity
 
-Prepared: 9 November 2026. Scope: an implementation plan, not a macOS implementation or a verified compatibility claim.
+Prepared: 9 November 2026. Baseline reviewed: 10 November 2026. Scope: an implementation plan, not a macOS implementation or a verified compatibility claim.
 
 ## 1. Product contract
 
@@ -20,7 +20,7 @@ Literal identity of two operating systems cannot be guaranteed: macOS owns its i
 
 ## 2. Repository baseline and actual blockers
 
-This plan follows the current working-tree source and README. `STATUS.md` contains older descriptions of manual/optional Yttrium setup; current creation forces Yttrium and automatic provisioning. Preserve existing local changes when implementing this plan.
+This plan follows the working-tree source and README reviewed on 10 November 2026, including the existing local setup and UI changes. Current creation forces Yttrium and automatic provisioning. Preserve existing local changes when implementing this plan; historical handoff descriptions do not override current behavior.
 
 | Current source | Integration work required |
 | --- | --- |
@@ -33,6 +33,9 @@ This plan follows the current working-tree source and README. `STATUS.md` contai
 | `setup.py` installs a Linux Flatpak stack; runtime lookup includes `/opt/virtue/share` | Bundle or securely provision Mac-native dependencies and resolve app-bundle resources. |
 | `store.py` and `runtime.py` use XDG defaults; service folder opening uses `xdg-open` on Linux | Introduce Mac paths and Finder integration while preserving explicit data roots. |
 | `ui/style.py` uses fonts that may resolve differently; guest display is a separate QEMU GTK window | Qualify both the Qt control center and the Windows display, including MacBook input and Retina scaling. |
+| `ui/display.py`, `backends/display.py` and `services.py` implement saved monitor selection, physical resolution/refresh matching and display diagnostics | Preserve asynchronous guest-agent integration, requested-versus-confirmed results, existing-guest integration repair and Windows DPI. |
+| `domain.py`, `backends/command.py` and `ui/main.py` expose SolidWorks compatibility, graphics troubleshooting and per-session safe graphics | Preserve settings and recovery actions. Qualify compatibility behavior per execution profile; x86 CPU flags are not an ARM implementation, and compatibility mode does not fix graphics drivers or guarantee license acceptance. |
+| `guest/Install-VirtueGuest.ps1` applies optional Windows cleanup to fresh installations | Preserve the exact app allowlist, OneDrive account/folder safeguards, nonblocking failure reporting and existing-guest repair behavior. |
 | `.virtue` archives carry disk, firmware, TPM, configuration and credentials | Preserve complete state and verify destination compatibility before launch. Existing exports do not include local checkpoint history. |
 | Packaging and workflows target DEB/RPM | Add a signed, notarized Mac application and architecture-specific qualification. |
 
@@ -58,7 +61,7 @@ For graphics, investigate a macOS port of the required Yttrium stack first. The 
 
 ### Backend and host boundary
 
-1. Expand `VirtualizationBackend` in `src/virtue/backends/backend.py` to describe what `VMService` actually uses: lifecycle, `is_active`, `prepare_offline`, checkpoints, disk expansion, removal, setup status/diagnostics and retry. Preserve existing method behavior and error semantics.
+1. Expand `VirtualizationBackend` in `src/virtue/backends/backend.py` to describe what `VMService` actually uses: lifecycle, `is_active`, `prepare_offline`, checkpoints, disk expansion, removal, setup status/diagnostics, retry and `display_status`. Preserve existing method behavior, display diagnostic fields and error semantics. Preserve the `display_mode` and `fullscreen` launch arguments; an advertised Mac profile must implement display integration rather than silently omit it through the current optional-method check.
 2. Add `src/virtue/backends/factory.py` to select Linux or macOS by host platform and validated profile. Keep constructor injection for existing tests. Unsupported development hosts retain truthful read-only behavior.
 3. Extract shared QEMU operations into `src/virtue/backends/qemu.py` as needed. Keep `LinuxBackend` and add `MacOSBackend` as small platform adapters. Avoid copying the roughly 900-line Linux implementation or rewriting it wholesale.
 4. Add narrow platform helpers for runtime paths, process ownership and host resource probing. Leave QMP and guest-agent transports shared where their actual behavior is portable.
@@ -68,7 +71,7 @@ For graphics, investigate a macOS port of the required Yttrium stack first. The 
 
 1. Add a versioned execution profile containing guest architecture, machine/device profile and graphics implementation. Keep host-specific executable paths and temporary sockets out of portable VM configuration.
 2. Implement an explicit schema migration. A schema-1 VM means the existing x64/Q35 profile, never “whatever this Mac supports.” Reject unknown versions and unsupported profile combinations before writing or starting anything.
-3. Preserve existing x64 filenames, private firmware, TPM state, graphics settings, credentials and checkpoint contents. Migrate configuration in staging with a recoverable original; never rewrite the library just to enumerate it.
+3. Preserve existing x64 filenames, private firmware, TPM state, graphics settings, credentials and checkpoint contents. Preserve saved resource, display, input and `solidworks_compatibility` settings in active configurations, checkpoints and archives; never silently reset an option during migration. Migrate configuration in staging with a recoverable original; never rewrite the library just to enumerate it.
 4. Load schema-1 configurations inside old checkpoints and archives as well as the active VM. Restore the configuration and execution profile together with disk/firmware/TPM.
 5. Keep the existing archive format when its contents suffice. Version it only if new state files require it; readers must continue importing current archives. Older readers must fail clearly on unsupported new configuration rather than misinterpret it.
 6. Compatibility checks must distinguish importing an intact archive from being able to run its guest. An architecture mismatch must not become silent conversion or an apparently successful launch.
@@ -92,9 +95,12 @@ Every row must pass on the Linux reference and each advertised Mac profile. Exis
 | First launch and diagnostics | Select the Mac runtime automatically. Inspect actual capabilities; show actionable failures. Normal installation needs no terminal, package manager or Linux administrator helper. |
 | Create Windows | Preserve the wizard, presets, resource reservations, disk allocation, ISO selection, progress and automatic restarts. Inspect guest architecture before allocating a VM. Invalid media leaves recoverable state. |
 | Automatic guest setup | Resolve bundled media tools instead of depending on shell `PATH`. Preserve generated credentials, automatic sign-in, installer detachment, drivers, graphics verification and setup progress. Do not mark ready on boot or driver enumeration alone. |
-| Repair and retry | Preserve both unfinished-install retry and installed-guest repair, including idempotent phases, updated repair media, guest-agent/serial reporting, logs and no accidental reinstall. |
+| Fresh-install Windows cleanup | Preserve the current optional-app allowlist, verified registered OneDrive uninstaller and account/folder safeguards, reduced animations and user-overridable Edge defaults. Preserve Store, App Installer, security, updates, font smoothing and graphics acceleration; leave GPU scheduling at the driver default. Optional failures remain nonblocking and are recorded in `C:\ProgramData\Virtue\windows-optimization.json`. Preserve interrupted fresh-install cleanup recovery without repeating completed cleanup. |
+| Repair and retry | Preserve both unfinished-install retry and installed-guest repair, including idempotent phases, updated repair media, guest-agent/serial reporting, logs and no accidental reinstall. Repairs must not newly opt existing guests into fresh-install cleanup or remove apps/preferences the user restored. |
 | Start, restart and shutdown | Prove normal boot, safe shutdown waiting for Windows, guest-agent-assisted restart and separately confirmed force stop. Preserve state after GUI closure/crash and reconnect. |
-| Windows display | Preserve the separate desktop window, fit-to-window scaling, fullscreen, controls visibility, capture/release and safe graphics. Qualify renderer and display transport together; an attractive preview does not demonstrate acceleration. |
+| Windows display | Preserve the separate desktop window, fit-to-window scaling, saved and one-time fullscreen, controls visibility, relative mouse mode and capture on hover. Preserve per-session safe graphics without changing the saved graphics stack; a subsequent normal start returns to the configured renderer. Qualify renderer and display transport together; an attractive preview does not demonstrate acceleration. |
+| Monitor matching and diagnostics | Preserve saved monitor selection and matching opt-out, physical-pixel resolution requests, closest supported guest refresh rate and unchanged Windows DPI. Unsupported modes leave the current guest display intact. Matching runs asynchronously after sign-in without blocking boot; existing managed guests receive integration through the guest agent when needed. Preserve `display_status` and requested-versus-confirmed host diagnostics, including unsupported/error results. |
+| SolidWorks compatibility and graphics help | Preserve the stopped-guest, reversible `Fix SolidWorks` setting and its saved configuration. Qualify the current CPU/SMBIOS behavior on x64 profiles and prove equivalent behavior before claiming it on another profile. Preserve the separate troubleshooting action, application-only software OpenGL guidance and per-session safe-graphics recovery. Keep license/reactivation caveats; these workarounds do not establish accelerated CAD acceptance or resolve unconfirmed crash causes. |
 | Keyboard and pointer | Retain documented Ctrl+Alt+M/F/G actions where deliverable; provide visible menu equivalents. Check Control/Option/Command mapping, Delete, function keys, Windows key, Ctrl+Alt+Delete delivery, key repeat, focus loss and stuck-key prevention. Do not steal ordinary Windows shortcuts. |
 | MacBook trackpad and Retina | Verify click, secondary click, drag, double click, scrolling, pointer alignment and capture escape. Test 1x/2x scaling, changing display scale, and moving the window between internal/external displays. Preserve coordinates and guest resolution without blur or clipping. |
 | Audio | Use a qualified Mac audio backend, normally CoreAudio if supported by the pinned runtime. Verify output, guest microphone input, device changes, Bluetooth/headphones and reconnect after sleep. Handle required macOS privacy prompts only when the feature is used. |
@@ -130,7 +136,7 @@ Clipboard sharing, shared folders, seamless individual Windows apps and multi-mo
 
 - First prove the selected Windows renderer with a completed draw/readback and the required API workload. Then prove presentation through the selected window transport at Retina scale. Check software-renderer fallbacks explicitly.
 - Evaluate the existing QEMU GTK frontend for a distributable Mac build and matching controls. Evaluate the native QEMU Mac frontend during feasibility if necessary. Adopt neither solely because it launches.
-- If neither frontend meets the contract, implement a shared Qt guest viewer for both hosts using a proven local display transport that retains the qualified graphics path. Close that transport/acceleration decision before viewer implementation; keep sockets private and expose no unauthenticated network display.
+- If neither frontend meets the contract, record the display blocker and propose a separate viewer scope decision. This plan does not authorize replacing the Linux QEMU GTK display as part of routine Mac work. A shared Qt guest viewer requires explicit authorization, a proven local transport that retains the qualified graphics path and separate Linux acceptance before any default changes. Keep the existing Linux display as the default while evaluating alternatives; keep sockets private and expose no unauthenticated network display.
 - Use the current shared Qt style and icons. Freeze a redistributable common font and, if necessary, an explicit Qt widget style after a Linux comparison; verify that this does not redesign the reference UI. Do not create a Mac-only theme.
 - Keep renderer identities truthful in diagnostics. A new renderer needs profile-aware guest evidence; do not weaken the existing Venus/Zink checks into “some GPU name appeared.” Verify OpenGL, Vulkan and Direct3D separately where claimed, then run actual CAD workflows.
 
@@ -149,13 +155,13 @@ Each batch is a focused, reviewable change. Add only the supporting files actual
 
 | Batch | Main files | Done when |
 | --- | --- | --- |
-| P0 — Freeze reference | `docs/validation.md`, existing Linux acceptance procedures | Working Linux installation, automatic Windows setup, lifecycle, recovery and GPU/CAD evidence are recorded; every visible action has an expected result. Record exact source/runtime revisions and qualification hardware. |
+| P0 — Freeze reference | `docs/validation.md`, existing Linux acceptance procedures | Working Linux installation, automatic Windows setup, lifecycle, recovery and GPU/CAD evidence are recorded; every visible action has an expected result, including current cleanup, SolidWorks and display behavior. Record exact source/runtime revisions, any uncommitted changes included in the reference and qualification hardware. |
 | P1 — Prove Mac feasibility | Isolated Mac probes/runtime recipe; new `docs/macos-validation.md` | Architecture/graphics/display decision in section 3 is closed for Apple Silicon; Intel has its own result. Unsupported or failed routes are explicit. No product-parity claim yet. |
 | P2 — Add shared boundaries | `backends/backend.py`, new `backends/factory.py`, `services.py`, `host.py`, targeted helpers | Linux keeps existing behavior; Mac selects truthful host diagnostics and an explicit profile. No fake readiness or empty-success setup. |
 | P3 — Version portable state | `domain.py`, `store.py`, `runtime.py`, `backup.py`, snapshot helpers | Existing configs, checkpoints and archives remain readable; data changes are recoverable; incompatible profiles cannot launch. Mac storage and private runtime paths work. |
 | P4 — Implement Mac execution | New `backends/macos.py`, shared QEMU operations, command profiles, runtime manifest | Real creation/boot/reconnect/shutdown/restart/force stop, ownership verification, locks, offline checks and cold recovery pass on Mac hardware. |
-| P5 — Complete automatic setup | `setup.py`, `provisioning.py`, `resources/`, `guest/`, `graphics.py` | A fresh user-selected ISO reaches a verified usable Windows desktop without terminal/driver work; retry and installed-guest repair pass. Required graphics is active. |
-| P6 — Close interaction parity | `backends/display.py` or proven viewer, `ui/main.py`, `dialogs.py`, `style.py`, platform audio/input integration | Every matrix row passes, including trackpad, Retina, keys, audio, workload rendering and MacBook lifecycle. |
+| P5 — Complete automatic setup | `setup.py`, `provisioning.py`, `resources/`, `guest/`, `graphics.py` | A fresh user-selected ISO reaches a verified usable Windows desktop without terminal/driver work; cleanup safeguards/reporting, retry and installed-guest repair pass without newly opting existing guests into cleanup. Required graphics is active. |
+| P6 — Close interaction parity | `backends/display.py`, `ui/display.py`, `ui/main.py`, `ui/dialogs.py`, `ui/style.py`, platform audio/input integration | Interaction matrix rows pass, including monitor matching/diagnostics, SolidWorks controls and recovery, trackpad, Retina, keys, audio, workload rendering and MacBook lifecycle. Any shared-viewer replacement follows its separate scope and Linux acceptance decision. |
 | P7 — Package and qualify | New `packaging/macos/`, `tools/build_macos.py`, Mac workflow; `pyproject.toml`, `THIRD_PARTY.md` | A signed/notarized app installs and works on clean qualified Macs with no developer dependencies. Linux packaging and behavior retain their acceptance results. |
 | P8 — Release decision | Validation ledgers, README and build/support documentation | All required gates pass, support matrix and known limitations match evidence, and release authorization is obtained. |
 

@@ -137,12 +137,14 @@ def build_qemu_command(
                     "-device", gpu, "-vga", "none"]
     else:
         command += ["-device", "VGA,vgamem_mb=64"]
-    # Keep controls discoverable and keyboard focus deliberate. GTK owns focus-loss
-    # key releases and monitor-paced rendering; do not add a Python frame timer.
-    display = f"gtk,gl={'on' if graphics == 'yttrium' else 'off'},show-menubar=on,show-tabs=off,zoom-to-fit=on"
-    display += f",grab-on-hover={'on' if getattr(config, 'grab_on_hover', False) else 'off'}"
+    # Let GTK own keyboard grabs and focus-loss key releases. Fullscreen launches
+    # capture input even when automatic capture is disabled for windowed use.
+    fullscreen = fullscreen or getattr(config, "start_fullscreen", False)
+    capture_keyboard = fullscreen or getattr(config, "grab_on_hover", True)
+    display = f"gtk,gl={'on' if graphics == 'yttrium' else 'off'},show-menubar=off,show-tabs=off,zoom-to-fit=on"
+    display += f",grab-on-hover={'on' if capture_keyboard else 'off'}"
     command += ["-display", display]
-    if fullscreen or getattr(config, "start_fullscreen", False):
+    if fullscreen:
         command += ["-full-screen"]
     if audio_backend:
         if audio_backend not in {"pa", "pipewire", "alsa", "sdl"}:

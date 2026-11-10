@@ -173,6 +173,9 @@ class MainWindow(QMainWindow):
         self.repair_button.hide()
         banner_layout.addWidget(self.repair_button)
         body.addWidget(self.banner)
+        body.addWidget(label("Windows: Ctrl+Alt+F enters or exits fullscreen. "
+                             "Ctrl+Alt+G returns control to Linux.\n"
+                             "Launch fullscreen: ⋯ → Start fullscreen.", "muted", True))
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -582,7 +585,12 @@ class MainWindow(QMainWindow):
         solidworks.setChecked(bool(vm.get("solidworks_compatibility")))
         solidworks.setToolTip("Shut down Windows after setup to enable or undo SolidWorks compatibility. "
                               "Reduces VM detection signals; license acceptance is not guaranteed.")
+        action("SolidWorks graphics help…", self.show_solidworks_graphics_help, bool(vm.get("installed")))
         action("Start fullscreen", lambda: self.start_vm(vm, fullscreen=True), self._can_launch(vm) and stopped)
+        safe_graphics = action("Start with safe graphics", lambda: self.start_vm(vm, safe=True),
+                               self._can_launch(vm) and stopped)
+        safe_graphics.setToolTip("Bypass the experimental Yttrium graphics driver for this Windows session. "
+                                "3D rendering may be slower. Use Start for normal graphics next time.")
         action("Shut down", lambda: self.shutdown_vm(vm), active)
         action("Restart…", lambda: self.restart_vm(vm), vm.get("state") == "running")
         if vm.get("state") == "paused":
@@ -631,8 +639,28 @@ class MainWindow(QMainWindow):
         options = {"display_mode": mode} if mode is not None else {}
         if fullscreen:
             options["fullscreen"] = True
-        self._perform("Starting Windows in its desktop window…",
+        message = "Starting Windows with safe graphics…" if safe else "Starting Windows in its desktop window…"
+        self._perform(message,
                       lambda: self.service.start_vm(vm["id"], safe_graphics=safe, **options))
+
+    def show_solidworks_graphics_help(self):
+        TextDialog("SolidWorks graphics troubleshooting", (
+            "A crash after selecting a model can be caused by the experimental Yttrium/Zink graphics driver. "
+            "The Fix SolidWorks setting changes VM detection signals; it does not fix graphics drivers.\n\n"
+            "Try the SolidWorks-only workaround first:\n"
+            "1. Open SolidWorks with no documents open. Go to Tools > Options > System Options > Performance.\n"
+            "2. Clear Enhanced graphics performance, click OK, then close and reopen SolidWorks.\n"
+            "3. Return to Performance with no documents open and enable Use Software OpenGL.\n"
+            "4. Open your model again. Software rendering can be slower.\n\n"
+            "If that option is unavailable or crashes continue, shut down Windows completely, then choose "
+            "Start with safe graphics in this menu. This bypasses Yttrium for the whole Windows session. "
+            "Use the normal Start button after the next shutdown to return to Yttrium.\n\n"
+            "If software rendering still crashes, collect the Application Error for SLDWORKS.exe in Windows "
+            "Event Viewer, including the faulting module, and check whether a new blank part also crashes. "
+            "The cause has not been confirmed without guest crash evidence.\n\n"
+            "SOLIDWORKS guidance:\n"
+            "https://help.solidworks.com/2025/english/SolidWorks/sldworks/c_Performance_Settings_with_OpenGL.htm"
+        ), self).exec()
 
     def fix_solidworks(self, vm, enabled):
         def applied(updated):
@@ -642,6 +670,10 @@ class MainWindow(QMainWindow):
                     "with your license.\n\n"
                     "This reduces common VM detection signals, but license acceptance is not guaranteed. "
                     "Performance may be lower, and Windows or other apps may request reactivation.\n\n"
+                    "Try this inside SolidWorks:\n"
+                    "1. With no documents open, go to Tools → Options → System Options → Performance.\n"
+                    "2. Disable Enhanced graphics performance, then restart SolidWorks.\n"
+                    "3. Enable Use Software OpenGL, then reopen your model.\n\n"
                     "To undo, shut down Windows and uncheck Fix SolidWorks."
                 )
             else:
@@ -739,11 +771,17 @@ class MainWindow(QMainWindow):
         TextDialog("Setup", GRAPHICS_GUIDE, self, rich=True).exec()
 
     def show_display_guide(self):
-        TextDialog("Display", "Virtue: F11 toggles fullscreen; Escape leaves fullscreen.\n\n"
-                   "Windows viewer:\nCtrl+Alt+M    Show / hide controls\n"
-                   "Ctrl+Alt+F    Fullscreen\n"
-                   "Ctrl+Alt+G    Release input\n\n"
-                   "If a shortcut does not respond, show controls first.\n"
+        TextDialog("Display", "Windows fullscreen:\n"
+                   "In the Windows window, press Ctrl+Alt+F to enter fullscreen. "
+                   "Press Ctrl+Alt+F again to exit fullscreen.\n"
+                   "To launch fullscreen, open the Windows menu (⋯) and choose Start fullscreen. "
+                   "For every launch, enable Start Windows in fullscreen in Settings → Display.\n\n"
+                   "Windows captures keyboard input in fullscreen. While captured, the Windows key and "
+                   "Alt+Tab control Windows.\n\n"
+                   "Windows viewer (controls hidden by default):\nCtrl+Alt+M    Show / hide controls\n"
+                   "Ctrl+Alt+F    Enter / exit fullscreen\n"
+                   "Ctrl+Alt+G    Return input to Linux\n\n"
+                   "Virtue library: F11 enters or exits fullscreen; Escape exits fullscreen.\n\n"
                    "Settings → Display controls startup fullscreen, monitor matching and input capture.\n"
                    "Matching selects a supported guest mode; Zoom To Fit scales the resulting image.\n"
                    "Use Shut down in the library to stop Windows safely.", self).exec()

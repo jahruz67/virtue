@@ -5,6 +5,8 @@ $ErrorActionPreference = 'Stop'
 $work = Join-Path ([System.Environment]::GetFolderPath('CommonApplicationData')) 'Virtue'
 $statusPath = Join-Path $work 'setup-status.json'
 $installedAssetsPath = Join-Path $work 'installed-assets.json'
+$lightweightPendingPath = Join-Path $work 'lightweight-setup.pending'
+$lightweightReportPath = Join-Path $work 'windows-optimization.json'
 $taskName = 'VirtueFinishSetup'
 
 function New-WorkSecurity([bool]$directory) {
@@ -123,6 +125,149 @@ function Invoke-Installer([string]$file, [string[]]$arguments) {
         Write-Status 'installing' 'Waiting for another Windows installer to finish…' $phase
         Start-Sleep -Seconds 5
     }
+}
+
+function Uninstall-UnusedOneDrive {
+    # Never unlink an account, move synced files, or delete OneDrive folders.
+    # A user may have signed in while unattended setup was still finishing.
+    if (@(Get-ChildItem -LiteralPath 'HKCU:\Software\Microsoft\OneDrive\Accounts' -ErrorAction SilentlyContinue).Count) {
+        throw 'OneDrive has an account configured; keep it installed and use its settings to stop folder backup and unlink first.'
+    }
+    foreach ($folder in @('DesktopDirectory', 'MyDocuments', 'MyPictures')) {
+        if ([Environment]::GetFolderPath($folder) -match '\\OneDrive(?: - [^\\]+)?(?:\\|$)') {
+            throw 'A Windows folder still points into OneDrive; restore its local location in OneDrive settings before uninstalling.'
+        }
+    }
+    $roots = @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')
+    $entries = @(foreach ($root in $roots) {
+        if (Test-Path -LiteralPath $root) {
+            Get-ChildItem -LiteralPath $root | Get-ItemProperty |
+                Where-Object { $_.DisplayName -eq 'Microsoft OneDrive' -and $_.Publisher -eq 'Microsoft Corporation' }
+        }
+    })
+    foreach ($entry in $entries) {
+        if (-not (Test-Path -LiteralPath $entry.PSPath)) { continue }
+        # Use the same registered uninstaller as Installed apps, without eval,
+        # guessed setup paths, process termination, or forced registry removal.
+        $command = [Environment]::ExpandEnvironmentVariables([string]$entry.UninstallString)
+        if ($command -notmatch '^\s*(?:"(?<file>[^"]+)"|(?<file>.+?\.exe))\s+(?<arguments>.+?)\s*$') {
+            throw 'OneDrive has no recognized registered uninstall command; leaving it installed.'
+        }
+        $file = $Matches.file
+        $arguments = @($Matches.arguments -split '\s+')
+        if ([IO.Path]::GetFileName($file) -ine 'OneDriveSetup.exe' -or
+            -not [IO.Path]::IsPathRooted($file) -or -not (Test-Path -LiteralPath $file -PathType Leaf) -or
+            '/uninstall' -notin $arguments -or @($arguments | Where-Object { $_ -notin @('/uninstall', '/allusers') }).Count) {
+            throw 'OneDrive has an unsupported uninstall command; leaving it installed.'
+        }
+        $signature = Get-AuthenticodeSignature -LiteralPath $file
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') {
+            throw 'The registered OneDrive uninstaller could not be verified as Microsoft signed.'
+        }
+        $process = Start-Process -FilePath $file -ArgumentList $arguments -WindowStyle Hidden -PassThru
+        try {
+            if (-not $process.WaitForExit(300000)) {
+                throw 'The normal OneDrive uninstall is still running; it was left running without forcing removal.'
+            }
+            if ($process.ExitCode -notin @(0, 3010)) { throw "OneDrive uninstall returned exit code $($process.ExitCode)." }
+        } finally { $process.Dispose() }
+        if (Test-Path -LiteralPath $entry.PSPath) { throw 'OneDrive still has an installed-app entry after uninstall.' }
+    }
+    if ($entries.Count) { 'Removed using the registered Microsoft uninstaller.' }
+    else { 'OneDrive was not installed.' }
+}
+
+function Set-LightweightVisualEffects {
+    # Supported Windows preferences API; retain font smoothing and GPU acceleration.
+    # https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-systemparametersinfow
+    if (-not ('VirtueVisualPreferences' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class VirtueVisualPreferences {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct AnimationInfo { public uint cbSize; public int iMinAnimate; }
+    [DllImport("user32.dll", EntryPoint="SystemParametersInfoW", SetLastError=true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool Set(uint action, uint parameter, IntPtr value, uint flags);
+    [DllImport("user32.dll", EntryPoint="SystemParametersInfoW", SetLastError=true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetAnimation(uint action, uint parameter, ref AnimationInfo value, uint flags);
+}
+'@
+    }
+    # Client-area, menu and tooltip animations; save and broadcast the changes.
+    foreach ($action in @(0x1043, 0x1003, 0x1017)) {
+        if (-not [VirtueVisualPreferences]::Set($action, 0, [IntPtr]::Zero, 3)) {
+            throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error())
+        }
+    }
+    $animation = [VirtueVisualPreferences+AnimationInfo]::new()
+    $animation.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($animation)
+    $animation.iMinAnimate = 0
+    if (-not [VirtueVisualPreferences]::SetAnimation(0x0049, $animation.cbSize, [ref]$animation, 3)) {
+        throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error())
+    }
+    'Disabled desktop animations; font smoothing and hardware graphics remain available.'
+}
+
+function Initialize-LightweightWindows {
+    $results = [System.Collections.Generic.List[object]]::new()
+    $actions = [ordered]@{
+        OneDrive = { Uninstall-UnusedOneDrive }
+        VisualEffects = { Set-LightweightVisualEffects }
+        EdgeBackground = {
+            # Documented recommended policies remain overridable in Edge settings.
+            $key = 'HKCU:\Software\Policies\Microsoft\Edge\Recommended'
+            if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force | Out-Null }
+            foreach ($name in @('StartupBoostEnabled', 'BackgroundModeEnabled')) {
+                New-ItemProperty -LiteralPath $key -Name $name -Value 0 -PropertyType DWord -Force | Out-Null
+            }
+            'Disabled Edge startup boost and running background apps after closing Edge by default.'
+        }
+    }
+    # Exact optional-app names only. Keep Store, App Installer, frameworks,
+    # codecs, WebView2, security components, and Xbox gaming dependencies.
+    $optionalApps = @('Clipchamp.Clipchamp', 'Microsoft.BingNews', 'Microsoft.BingWeather',
+        'Microsoft.Getstarted', 'Microsoft.MicrosoftSolitaireCollection', 'Microsoft.MicrosoftOfficeHub',
+        'Microsoft.WindowsFeedbackHub', 'Microsoft.Microsoft3DViewer', 'Microsoft.MixedReality.Portal',
+        'Microsoft.SkypeApp', 'Microsoft.YourPhone', 'MicrosoftTeams', 'MSTeams',
+        'Microsoft.Copilot', 'Microsoft.OutlookForWindows')
+    foreach ($action in $actions.GetEnumerator()) {
+        try {
+            $detail = (& $action.Value | Out-String).Trim()
+            $results.Add(@{ action=$action.Key; state='applied'; detail=$detail })
+        } catch {
+            $results.Add(@{ action=$action.Key; state='skipped'; detail=$_.Exception.Message })
+            Write-Warning "Optional Windows cleanup ($($action.Key)): $($_.Exception.Message)"
+        }
+    }
+    # Enumerating provisioning invokes DISM; inventory it once for the allowlist.
+    $provisionedApps = @()
+    $provisioningError = $null
+    try { $provisionedApps = @(Get-AppxProvisionedPackage -Online) }
+    catch { $provisioningError = $_.Exception.Message }
+    foreach ($name in $optionalApps) {
+        try {
+            foreach ($package in @(Get-AppxPackage -Name $name)) {
+                if ($package.NonRemovable -or $package.IsFramework) { throw 'Windows marks this package as a required component.' }
+                Remove-AppxPackage -Package $package.PackageFullName
+            }
+            if ($provisioningError) { throw "Could not inventory optional apps for future users: $provisioningError" }
+            foreach ($package in @($provisionedApps | Where-Object { $_.DisplayName -eq $name })) {
+                Remove-AppxProvisionedPackage -Online -PackageName $package.PackageName | Out-Null
+            }
+            $results.Add(@{ action=$name; state='applied'; detail='Optional app absent for the setup user and future users.' })
+        } catch {
+            $results.Add(@{ action=$name; state='skipped'; detail=$_.Exception.Message })
+            Write-Warning "Optional app cleanup ($name): $($_.Exception.Message)"
+        }
+    }
+    $report = @{ version=1; updated_at=[DateTime]::UtcNow.ToString('o'); actions=@($results.ToArray()) }
+    Write-WorkFile $lightweightReportPath ($report | ConvertTo-Json -Depth 5)
+    return $report
 }
 
 function New-SetupMutex {
@@ -488,6 +633,11 @@ try {
         }
         Enable-AutomaticLogon
         Register-Resume
+        if (-not $Repair) {
+            # Only a fresh installation opts in. Repairs preserve existing apps
+            # and preferences, including apps the user subsequently reinstalls.
+            Write-WorkFile $lightweightPendingPath '1'
+        }
         if ($Repair) {
             Write-Status 'installing' 'Resuming Windows setup with updated components…' $phase
             Start-Resume $setupMutex ([ref]$ownsSetupMutex)
@@ -516,10 +666,20 @@ try {
         Write-Status 'installing' 'Finishing Windows setup after restart…' 3
         Restart-Computer -Force
     } elseif ($phase -eq 3) {
+        $cleanup = $null
+        if (Test-Path -LiteralPath $lightweightPendingPath -PathType Leaf) {
+            Write-Status 'installing' 'Removing optional apps and reducing Windows background activity…' 3
+            $cleanup = Initialize-LightweightWindows
+            Remove-Item -LiteralPath $lightweightPendingPath -Force
+        }
         # Keep this private VM opening directly into its generated Windows account.
         Enable-AutomaticLogon
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-        Write-Status 'ready' 'Windows is ready.' 3
+        $message = 'Windows is ready.'
+        if ($cleanup -and @($cleanup.actions | Where-Object { $_.state -eq 'skipped' }).Count) {
+            $message = "Windows is ready. Some optional cleanup was skipped; details: $lightweightReportPath"
+        }
+        Write-Status 'ready' $message 3
     } else { throw 'The automatic installation state is invalid.' }
 } catch {
     $failure = $_
