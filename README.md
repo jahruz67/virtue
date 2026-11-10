@@ -4,6 +4,11 @@ A Linux-first Qt 6 desktop application for running Windows with QEMU/KVM. The
 engine launches real QEMU and swtpm processes, manages them through QMP, and stores
 each VM independently of the desktop application's lifetime.
 
+An Apple Silicon macOS port is implemented in source using HVF and
+Triton/Neptune/DXMT. The release workflow now builds its native runtime and app
+automatically on a Mac runner; this build recipe and the port remain unvalidated. See the
+[Mac build and implementation status](docs/macos-validation.md).
+
 **Release status: engineering preview, not a validated Linux release.** The handoff
 records partial automated test runs on Windows; final suite results are unconfirmed.
 This environment has no Linux/KVM host, Windows ISO, or SOLIDWORKS license.
@@ -29,11 +34,13 @@ Never run the desktop as root. The app's **Host diagnostics** shows missing
 dependencies and permissions. See [build and packaging](docs/build.md) for Fedora,
 native DEB packaging, headless diagnostics, and reproducible builds.
 
-Tagged GitHub prereleases provide an amd64 DEB for Ubuntu/Debian and an x86_64 RPM
-for Fedora, with SHA-256 checksums. Open the downloaded package in the desktop's
+Each push to `main` is configured to publish a GitHub prerelease after the Linux
+and Mac builds succeed, containing an amd64 DEB for Ubuntu/Debian, an x86_64 RPM
+for Fedora, and an Apple Silicon `Virtue.app` ZIP, with SHA-256 checksums.
+Open the downloaded Linux package in the desktop's
 software installer. The RPM uses Fedora's
 system Python and PySide6. These remain engineering previews requiring target-host
-validation; macOS packages are not provided.
+validation. The Mac package targets macOS 26 or later and uses ad-hoc signing.
 
 ## Install Windows
 

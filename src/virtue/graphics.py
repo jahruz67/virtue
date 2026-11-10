@@ -7,7 +7,7 @@ import re
 SOFTWARE = re.compile(r"llvmpipe|lavapipe|swiftshader|Microsoft Basic Render|GDI Generic|software rasterizer", re.I)
 
 
-def classify_guest_report(report: dict) -> dict:
+def classify_guest_report(report: dict, *, profile: str = "yttrium") -> dict:
     """Report individual API evidence and distinguish discovery from rendering.
 
     This is user-imported diagnostic evidence, not a signed attestation. Successful
@@ -24,6 +24,17 @@ def classify_guest_report(report: dict) -> dict:
         raise ValueError("Malformed GPU report: opengl, vulkan and render_tests must be objects.")
     renderer = str(opengl.get("renderer", ""))
     vendor = str(opengl.get("vendor", ""))
+    if profile == "triton":
+        return {"state": "unverified", "reasons": [
+            "This capture does not verify Triton Direct3D rendering or SolidWorks compatibility.",
+            "SolidWorks may use Software OpenGL while Windows retains its DirectX driver; an OpenGL result alone does not classify the whole Mac graphics path."],
+            "evidence": {"opengl_renderer": renderer, "opengl_vendor": vendor,
+                         "opengl_draw_passed": opengl.get("draw_test_passed") is True,
+                         "direct3d": "Unverified; no Direct3D workload is captured by this collector.",
+                         "report_time": str(report.get("collected_at", "")),
+                         "trust": "Imported user-provided diagnostic evidence."}}
+    if profile != "yttrium":
+        raise ValueError("Unknown guest graphics evidence profile.")
     devices = vulkan.get("devices", [])
     if not isinstance(devices, list):
         devices = []

@@ -23,8 +23,8 @@ class VMService:
         self._host_lock = threading.Lock()
         self._assets = None
         if backend is None:
-            from .backends.linux import LinuxBackend
-            backend = LinuxBackend(self.store.root, host)
+            from .backends.factory import create_backend
+            backend = create_backend(self.store.root, host)
         self.backend = backend
 
     @property
@@ -49,6 +49,14 @@ class VMService:
         return report
 
     def prepare_host(self, progress=lambda message: None, *, repair: bool = False):
+        if sys.platform == "darwin":
+            from .macos_runtime import prepare_runtime
+            if self._assets is None or repair:
+                self._assets = prepare_runtime(progress, repair=repair)
+                if not self._host_override:
+                    self._host_report = None
+                    self.backend.host = None
+            return self._assets
         if sys.platform != "linux":
             # Keep the existing read-only preview usable on development hosts.
             return {}
@@ -67,6 +75,8 @@ class VMService:
                                   f"Current state: {state}.")
 
     def _configure_resources(self, config: VMConfig, *, starting: bool = False, check_media: bool = True) -> VMConfig:
+        if sys.platform == "darwin":
+            self.backend.validate_profile(config)
         other_memory = 0
         if starting:
             for other in self.store.list():
@@ -149,7 +159,7 @@ class VMService:
             if report:
                 from .graphics import classify_guest_report
                 try:
-                    verification = classify_guest_report(report)
+                    verification = classify_guest_report(report, profile="triton" if config.execution_profile == "windows-arm64-virt-triton-v1" else "yttrium")
                 except (ValueError, TypeError, KeyError):
                     pass
                 else:
@@ -162,13 +172,19 @@ class VMService:
     def create_vm(self, options: dict, progress=lambda message: None) -> dict:
         assets = self.prepare_host(progress)
         with self.store.transaction():
-            config = VMConfig.new(options)
+            profile = "windows-arm64-virt-triton-v1" if sys.platform == "darwin" else "windows-x64-q35-v1"
+            config = VMConfig.new(options, execution_profile=profile)
             config = self._configure_resources(config, starting=True)
+            image = None
+            if sys.platform == "darwin":
+                from .provisioning import inspect_windows_iso
+                progress("Reading your Windows ISO and choosing its installation defaults…")
+                image = inspect_windows_iso(Path(config.iso_path), self.store.root, architecture="arm64")
             self.backend.create(config)
             self.store.save(config)
             try:
                 from .provisioning import prepare_windows
-                prepare_windows(config, self.store.directory(config.id), assets, progress)
+                prepare_windows(config, self.store.directory(config.id), assets, progress, image=image)
                 self.store.save(config)
                 progress("Starting the automatic Windows installation…")
                 self.backend.start(config)
@@ -183,6 +199,8 @@ class VMService:
         assets = self.prepare_host(progress)
         with self.store.transaction():
             config = self.store.load(vm_id)
+            if sys.platform == "darwin":
+                self.backend.validate_profile(config)
             if not config.auto_setup or config.installed:
                 raise ValidationError("This Windows environment has no unfinished automatic installation.")
             saved = self._setup_progress(self.store.directory(vm_id))
@@ -366,6 +384,8 @@ class VMService:
             raise ValidationError("QCOW2 external data files are not allowed.")
 
     def enable_yttrium(self, vm_id: str, consent: bool):
+        if sys.platform == "darwin":
+            raise ValidationError("The Mac profile uses Triton/Neptune with DXMT. Linux Yttrium drivers cannot be applied to this ARM environment.")
         if consent is not True:
             raise ValidationError("Explicit consent to experimental guest graphics is required.")
         with self.store.transaction():
@@ -390,12 +410,12 @@ class VMService:
     def import_gpu_report(self, vm_id: str, path: str):
         from .graphics import classify_guest_report
         with self.store.transaction():
-            self.store.load(vm_id)
+            config = self.store.load(vm_id)
             source = Path(path)
             if source.stat().st_size > 2 * 1024 * 1024:
                 raise ValidationError("Graphics report exceeds the 2 MiB limit.")
             report = json.loads(source.read_text(encoding="utf-8-sig"))
-            result = classify_guest_report(report)
+            result = classify_guest_report(report, profile="triton" if config.execution_profile == "windows-arm64-virt-triton-v1" else "yttrium")
             result["imported_at"] = time.time()
             result["source"] = source.name
             result["historical"] = True
@@ -408,6 +428,9 @@ class VMService:
             directory = self.store.directory(vm_id)
         if sys.platform.startswith("linux"):
             subprocess.Popen(["xdg-open", str(directory)], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["/usr/bin/open", str(directory)], start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif os.name == "nt":
             os.startfile(directory)

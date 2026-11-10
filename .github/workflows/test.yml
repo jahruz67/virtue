@@ -1,4 +1,4 @@
-name: Test and package
+name: Build and release
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
@@ -56,15 +56,20 @@ jobs:
           name: virtue-Linux
           path: dist/
 
+  build-macos:
+    name: Build Mac application
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    uses: ./.github/workflows/build-macos.yml
+
   release:
     name: Publish release packages
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: test
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [test, build-macos]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     concurrency:
-      group: release-${{ github.ref }}
+      group: release-${{ github.sha }}
       cancel-in-progress: false
     steps:
       - name: Download Linux release packages
@@ -73,21 +78,35 @@ jobs:
           name: virtue-Linux
           path: dist
 
+      - name: Download Mac release packages
+        uses: actions/download-artifact@v4
+        with:
+          name: virtue-macos-arm64
+          path: dist/macos
+
       - name: Publish packages to GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          assets=(dist/*.whl dist/*.tar.gz dist/*.deb dist/*.deb.sha256 dist/*.rpm dist/*.rpm.sha256)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            RELEASE_TAG="$GITHUB_REF_NAME"
+          else
+            RELEASE_TAG="build-$GITHUB_SHA"
+          fi
+          assets=(dist/*.whl dist/*.tar.gz dist/*.deb dist/*.deb.sha256 dist/*.rpm dist/*.rpm.sha256
+            dist/macos/Virtue-macos-arm64.zip dist/macos/Virtue-macos-arm64.zip.sha256
+            dist/macos/Virtue-macos-runtime-sources.tar.gz dist/macos/Virtue-macos-runtime-sources.tar.gz.sha256)
           for asset in "${assets[@]}"; do
             test -f "$asset" || { echo "Missing release asset: $asset" >&2; exit 1; }
           done
           (cd dist && sha256sum --check ./*.deb.sha256 ./*.rpm.sha256)
+          (cd dist/macos && sha256sum --check ./*.sha256)
           if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --generate-notes \
-              --title "Virtue $RELEASE_TAG" --prerelease "${assets[@]}"
+            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --generate-notes \
+              --title "Virtue $RELEASE_TAG" --prerelease --draft "${assets[@]}"
           else
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           fi
+          gh release edit "$RELEASE_TAG" --draft=false
 

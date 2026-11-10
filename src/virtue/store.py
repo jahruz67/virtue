@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import json
 import os
+import sys
 import tempfile
 import threading
 
@@ -12,6 +13,8 @@ from .domain import VMConfig, ValidationError, valid_id
 
 
 def default_root() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Virtue" / "vms"
     base = os.environ.get("XDG_DATA_HOME")
     if base and Path(base).is_absolute():
         return Path(base) / "virtue" / "vms"

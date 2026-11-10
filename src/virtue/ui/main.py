@@ -174,7 +174,7 @@ class MainWindow(QMainWindow):
         banner_layout.addWidget(self.repair_button)
         body.addWidget(self.banner)
         body.addWidget(label("Windows: Ctrl+Alt+F enters or exits fullscreen. "
-                             "Ctrl+Alt+G returns control to Linux.\n"
+                             f"Ctrl+Alt+G returns control to {'macOS' if sys.platform == 'darwin' else 'Linux'}.\n"
                              "Launch fullscreen: ⋯ → Start fullscreen.", "muted", True))
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -335,7 +335,7 @@ class MainWindow(QMainWindow):
             self.banner.setObjectName("banner")
         else:
             missing = [c.get("name", "Dependency") for c in self.host.get("checks", []) if c.get("required") and not c.get("ok")]
-            detail = ", ".join(missing) if missing else "a compatible Linux x86-64 host and working KVM"
+            detail = ", ".join(missing) if missing else "a compatible host and complete virtualization runtime"
             self.banner_text.setText(f"Setup required: {detail}.")
             self.banner.setObjectName("warning")
         self.banner.style().unpolish(self.banner)
@@ -435,13 +435,14 @@ class MainWindow(QMainWindow):
         disk = vm.get("disk_gib", 0)
         description = f"{used / (1024 ** 3):.1f} GiB on disk / {disk} GiB capacity"
         active_graphics = vm.get("active_graphics", vm.get("graphics", "safe"))
-        if self.vm_active(vm) and active_graphics == "safe" and vm.get("graphics") == "yttrium":
+        if self.vm_active(vm) and active_graphics == "safe" and vm.get("graphics") in {"yttrium", "triton"}:
             description += "  ·  Compatible display (safe launch)"
         else:
-            description += "  ·  Yttrium graphics" if active_graphics == "yttrium" else "  ·  Compatible display"
+            description += {"yttrium": "  ·  Yttrium graphics", "triton": "  ·  DirectX graphics"}.get(active_graphics, "  ·  Compatible display")
         if not vm.get("installed", False) and not vm.get("auto_setup"):
             description += "  ·  Installation in progress"
-        card.summary.setText(f"Windows {version}  ·  {vm.get('memory_mib', 0) / 1024:g} GiB  ·  {vm.get('cpus', '?')} CPUs")
+        architecture = " ARM64" if vm.get("execution_profile") == "windows-arm64-virt-triton-v1" else ""
+        card.summary.setText(f"Windows {version}{architecture}  ·  {vm.get('memory_mib', 0) / 1024:g} GiB  ·  {vm.get('cpus', '?')} CPUs")
         card.summary.setToolTip(description)
         card.summary.setAccessibleDescription(description)
         setup = vm.get("setup", {})
@@ -589,14 +590,14 @@ class MainWindow(QMainWindow):
         action("Start fullscreen", lambda: self.start_vm(vm, fullscreen=True), self._can_launch(vm) and stopped)
         safe_graphics = action("Start with safe graphics", lambda: self.start_vm(vm, safe=True),
                                self._can_launch(vm) and stopped)
-        safe_graphics.setToolTip("Bypass the experimental Yttrium graphics driver for this Windows session. "
+        safe_graphics.setToolTip("Bypass the experimental graphics driver for this Windows session. "
                                 "3D rendering may be slower. Use Start for normal graphics next time.")
         action("Shut down", lambda: self.shutdown_vm(vm), active)
         action("Restart…", lambda: self.restart_vm(vm), vm.get("state") == "running")
         if vm.get("state") == "paused":
             action("Resume", lambda: self.resume_vm(vm))
         else:
-            action("Pause", lambda: self.pause_vm(vm), vm.get("state") == "running" and vm.get("active_graphics", vm.get("graphics")) != "yttrium")
+            action("Pause", lambda: self.pause_vm(vm), vm.get("state") == "running" and vm.get("active_graphics", vm.get("graphics")) not in {"yttrium", "triton"})
         action("Force stop…", lambda: self.force_stop_vm(vm), active)
         menu.addSeparator()
         action("New checkpoint…", lambda: self.snapshot_vm(vm), offline_changes)
@@ -644,8 +645,9 @@ class MainWindow(QMainWindow):
                       lambda: self.service.start_vm(vm["id"], safe_graphics=safe, **options))
 
     def show_solidworks_graphics_help(self):
+        graphics_driver = "Triton/DXMT" if self.host.get("platform") == "Darwin" else "Yttrium/Zink"
         TextDialog("SolidWorks graphics troubleshooting", (
-            "A crash after selecting a model can be caused by the experimental Yttrium/Zink graphics driver. "
+            f"A crash after selecting a model can be caused by the experimental {graphics_driver} graphics driver. "
             "The Fix SolidWorks setting changes VM detection signals; it does not fix graphics drivers.\n\n"
             "Try the SolidWorks-only workaround first:\n"
             "1. Open SolidWorks with no documents open. Go to Tools > Options > System Options > Performance.\n"
@@ -653,8 +655,8 @@ class MainWindow(QMainWindow):
             "3. Return to Performance with no documents open and enable Use Software OpenGL.\n"
             "4. Open your model again. Software rendering can be slower.\n\n"
             "If that option is unavailable or crashes continue, shut down Windows completely, then choose "
-            "Start with safe graphics in this menu. This bypasses Yttrium for the whole Windows session. "
-            "Use the normal Start button after the next shutdown to return to Yttrium.\n\n"
+            "Start with safe graphics in this menu. This bypasses the experimental driver for the whole Windows session. "
+            "Use the normal Start button after the next shutdown to return to normal graphics.\n\n"
             "If software rendering still crashes, collect the Application Error for SLDWORKS.exe in Windows "
             "Event Viewer, including the faulting module, and check whether a new blank part also crashes. "
             "The cause has not been confirmed without guest crash evidence.\n\n"
@@ -768,6 +770,16 @@ class MainWindow(QMainWindow):
         self._perform("Refreshing host and graphics diagnostics…", self.service.host_report, show, refresh=False, allow_during_setup=True)
 
     def show_graphics_guide(self):
+        if self.host.get("platform") == "Darwin":
+            TextDialog("Mac Windows setup", (
+                "Use a Windows 11 ARM64 ISO. Graphics and integration drivers are bundled and installed automatically. "
+                "Windows runs x64 applications through its compatibility layer. Existing x64 Windows environments are preserved without conversion.\n\n"
+                "For the SolidWorks workaround used by the Linux edition, disable Enhanced graphics performance, restart SolidWorks, "
+                "then enable Use Software OpenGL with no documents open. This setting applies to SolidWorks; Windows retains its DirectX graphics driver. "
+                "It does not establish which API the SolidWorks software renderer uses internally.\n\n"
+                "The Mac graphics path is experimental. Successful driver installation does not establish application compatibility or performance."
+            ), self).exec()
+            return
         TextDialog("Setup", GRAPHICS_GUIDE, self, rich=True).exec()
 
     def show_display_guide(self):
@@ -780,7 +792,7 @@ class MainWindow(QMainWindow):
                    "Alt+Tab control Windows.\n\n"
                    "Windows viewer (controls hidden by default):\nCtrl+Alt+M    Show / hide controls\n"
                    "Ctrl+Alt+F    Enter / exit fullscreen\n"
-                   "Ctrl+Alt+G    Return input to Linux\n\n"
+                   "Ctrl+Alt+G    Return input to the host\n\n"
                    "Virtue library: F11 enters or exits fullscreen; Escape exits fullscreen.\n\n"
                    "Settings → Display controls startup fullscreen, monitor matching and input capture.\n"
                    "Matching selects a supported guest mode; Zoom To Fit scales the resulting image.\n"
@@ -788,13 +800,11 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def support_folder(name):
-        roots = [Path(__file__).resolve().parents[3], Path(sys.prefix) / "share" / "virtue", Path("/opt/virtue/share")]
-        if os.environ.get("VIRTUE_DATA_DIR"):
-            roots.insert(0, Path(os.environ["VIRTUE_DATA_DIR"]))
-        for root in roots:
-            if (root / name).is_dir():
-                return root / name
-        return None
+        from ..runtime import support_folder
+        try:
+            return support_folder(name)
+        except FileNotFoundError:
+            return None
 
     def open_support_folder(self, name):
         folder = self.support_folder(name)

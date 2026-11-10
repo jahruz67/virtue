@@ -31,3 +31,14 @@ Windows, SOLIDWORKS, benchmarks and drivers must be obtained under their own ter
 No Microsoft installer, product key, proprietary CAD package or activation bypass
 is shipped. Redistribution of modified third-party bundles requires honoring
 their notices and source obligations independently of Virtue's source license.
+
+The Mac workflow builds its native QEMU/virglrenderer, Neptune/DXMT and
+ANGLE/libepoxy components and bundles ARM firmware, TPM and media tools.
+`resources/macos-runtime.json` records its source revisions and the SHA-256
+hashes of the published Triton/ARM VirtIO media. The runtime builder records
+the actual revisions and Homebrew dependency metadata, includes license notices,
+and publishes a native source archive alongside the app. These binaries are not
+included in this source checkout. The Mac app builder verifies the runtime
+inventory and checksums; it does not substitute Linux artifacts or download
+proprietary D3DMetal. See
+`docs/macos-validation.md` for the runtime contract and upstream references.

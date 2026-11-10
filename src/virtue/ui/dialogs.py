@@ -99,6 +99,7 @@ class VMDialog(QDialog):
         self.vm = vm
         self.host = host
         vm = vm or {}
+        mac_guest = vm.get("execution_profile") == "windows-arm64-virt-triton-v1" or (not vm and host.get("platform") == "Darwin")
         self.setWindowTitle("Settings" if self.vm else "New Windows")
         self.setMinimumSize(420, 320)
         self.resize(660, 520)
@@ -126,8 +127,9 @@ class VMDialog(QDialog):
         self.name.setMaxLength(80)
         self.name.setObjectName("vmName")
         self.version = QComboBox()
-        self.version.addItem("Windows 11 x64", "11")
-        self.version.addItem("Windows 10 x64 · legacy", "10")
+        self.version.addItem("Windows 11 ARM64" if mac_guest else "Windows 11 x64", "11")
+        if not mac_guest:
+            self.version.addItem("Windows 10 x64 · legacy", "10")
         self.version.setCurrentIndex(1 if str(vm.get("windows_version", "11")) == "10" else 0)
         if self.vm:
             self.version.setEnabled(False)
@@ -143,6 +145,8 @@ class VMDialog(QDialog):
             self.drivers.hide()
         help_text = label("Windows ISO and license required. Creating Windows accepts the ISO’s license terms.", "muted", True)
         form.addRow(help_text)
+        if mac_guest:
+            form.addRow(label("Choose Windows 11 ARM64 media. Windows runs x64 applications through its compatibility layer; existing x64 VMs are not converted.", "muted", True))
         self.installed = QCheckBox("Installation complete")
         self.installed.setToolTip("Boot the installed Windows disk")
         self.installed.setChecked(bool(vm.get("installed", False)))
@@ -223,15 +227,19 @@ class VMDialog(QDialog):
         form3.setContentsMargins(20, 20, 20, 20)
         form3.setSpacing(14)
         self.storage_bus = QComboBox()
-        self.storage_bus.addItem("Compatible SATA · installer ready", "sata")
-        self.storage_bus.addItem("VirtIO · guest driver required", "virtio")
+        if mac_guest:
+            self.storage_bus.addItem("NVMe · installer ready", "nvme")
+        else:
+            self.storage_bus.addItem("Compatible SATA · installer ready", "sata")
+            self.storage_bus.addItem("VirtIO · guest driver required", "virtio")
         self.storage_bus.setCurrentIndex(1 if vm.get("storage_bus") == "virtio" else 0)
         self.virtio_network = QCheckBox("Use VirtIO network adapter")
-        self.virtio_network.setChecked(bool(vm.get("virtio_network", False)))
+        self.virtio_network.setChecked(bool(vm.get("virtio_network", mac_guest)))
         self.storage_bus.hide()
         self.virtio_network.hide()
-        form3.addRow(label("Included automatically:\nGraphics · Vulkan · Network · Sound\nUEFI · TPM · Drivers · Guest agent", "muted", True))
-        form3.addRow(label("Guest test signing enabled; Secure Boot disabled. Hardware rendering is verified during setup.", "muted", True))
+        features = "Graphics · DirectX · Network · Sound" if mac_guest else "Graphics · Vulkan · Network · Sound"
+        form3.addRow(label("Included automatically:\n" + features + "\nUEFI · TPM · Drivers · Guest agent", "muted", True))
+        form3.addRow(label("Guest test signing enabled; Secure Boot disabled. Graphics and application compatibility remain experimental." if mac_guest else "Guest test signing enabled; Secure Boot disabled. Hardware rendering is verified during setup.", "muted", True))
         self._display_settings(display, vm)
         self.error = label("", "error", True)
         self.error.hide()
@@ -274,6 +282,9 @@ class VMDialog(QDialog):
         self.grab_on_hover = QCheckBox("Capture keyboard on pointer entry in windowed mode")
         self.grab_on_hover.setToolTip("Fullscreen captures input automatically. Ctrl+Alt+G returns input to Linux.")
         self.grab_on_hover.setChecked(vm.get("grab_on_hover", True))
+        if self.host.get("platform") == "Darwin" or vm.get("execution_profile") == "windows-arm64-virt-triton-v1":
+            self.grab_on_hover.setEnabled(False)
+            self.grab_on_hover.setToolTip("Keyboard capture on pointer entry is unavailable in the Mac Windows viewer.")
         form.addRow(self.start_fullscreen)
         form.addRow(self.match_host_display)
         form.addRow("Match monitor", self.display_monitor)
@@ -381,8 +392,12 @@ def diagnostics_html(host, vms):
         color = "#14724d" if check.get("ok") else "#965a10"
         requirement = "required" if check.get("required") else "information"
         parts.append(f"<p><b style='color:{color}'>{'PASS' if check.get('ok') else 'CHECK'} · {esc(check.get('name', 'Dependency'))}</b> ({requirement})<br>{esc(check.get('detail', ''))}</p>")
-    parts.append("<h2>Yttrium graphics (required)</h2><p>Yttrium graphics and its host prerequisites are required for Windows setup. Automatic Windows setup installs the graphics driver and records a hardware rendering check before reporting completion. Host prerequisites do not prove guest acceleration.</p>")
-    parts.append(f"<p>Host stack: {'prerequisites detected' if host.get('yttrium_ready') else 'not ready or not verified'}</p>")
+    if host.get("platform") == "Darwin":
+        parts.append("<h2>Mac DirectX graphics</h2><p>Triton/Neptune uses DXMT and Metal. The SolidWorks Software OpenGL setting is separate from the Windows DirectX driver. Runtime prerequisites do not prove rendering, application compatibility or performance.</p>")
+        parts.append(f"<p>Host stack: {'prerequisites detected' if host.get('ready') else 'not ready or not verified'}</p>")
+    else:
+        parts.append("<h2>Yttrium graphics (required)</h2><p>Yttrium graphics and its host prerequisites are required for Windows setup. Automatic Windows setup installs the graphics driver and records a hardware rendering check before reporting completion. Host prerequisites do not prove guest acceleration.</p>")
+        parts.append(f"<p>Host stack: {'prerequisites detected' if host.get('yttrium_ready') else 'not ready or not verified'}</p>")
     for gpu in host.get("gpus", []):
         if isinstance(gpu, dict):
             parts.append("<p>" + "<br>".join(f"{esc(key)}: {esc(value)}" for key, value in gpu.items()) + "</p>")

@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "host_architecture": "arm64",
+  "execution_profile": "windows-arm64-virt-triton-v1",
+  "minimum_macos": "26.0",
+  "build_reference": "https://blog.getutm.app/2026/introducing-triton-directx-11-driver-for-qemu/",
+  "sources": {
+    "angle": {
+      "repository": "https://github.com/utmapp/WebKit.git",
+      "revision": "6a7f464047e2f6f2b65fe315aaad5d1ff3229cb7",
+      "license": "BSD and component-specific licenses; see ANGLE/LICENSE",
+      "sparse": ["Source/ThirdParty/ANGLE", "Configurations", "Tools/ccache"]
+    },
+    "epoxy": {
+      "repository": "https://github.com/utmapp/libepoxy.git",
+      "revision": "15d904dcb1d5a8d626ffe11e8f3339499d6f7b09",
+      "license": "MIT"
+    },
+    "llvm": {
+      "repository": "https://github.com/llvm/llvm-project.git",
+      "revision": "llvmorg-15.0.7",
+      "license": "Apache-2.0 WITH LLVM-exception",
+      "sparse": ["llvm", "cmake", "third-party"]
+    },
+    "dxmt": {
+      "repository": "https://github.com/utmapp/dxmt.git",
+      "revision": "1fe2e752c98207518a99c9322482f63ebb9f0232",
+      "license": "See LICENSE, LICENSE.OLD and COPYING.LIB in the source archive",
+      "submodules": true
+    },
+    "virglrenderer": {
+      "repository": "https://github.com/utmapp/virglrenderer.git",
+      "revision": "dd0652b13e589c4c124ea79123a3adcd85173f4f",
+      "license": "MIT and component-specific licenses"
+    },
+    "qemu": {
+      "repository": "https://github.com/utmapp/qemu.git",
+      "revision": "7fe362b13268ff239e09994b96e077d0cb743038",
+      "license": "GPL-2.0 and component-specific licenses"
+    },
+    "guest_drivers": {
+      "repository": "https://github.com/osy/kvm-guest-drivers-windows.git",
+      "revision": "v0.5",
+      "license": "BSD and component-specific licenses; see guest media and source archive"
+    }
+  },
+  "assets": {
+    "guest_driver": {
+      "url": "https://github.com/osy/kvm-guest-drivers-windows/releases/download/v0.5/viogpu3d-arm64x-signed.zip",
+      "sha256": "155695ab7820f71e75c369aeae7b8c060691ba43646ac37edef72aa2428506d5"
+    },
+    "virtio_iso": {
+      "url": "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.285-1/virtio-win-0.1.285.iso",
+      "sha256": "e14cf2b94492c3e925f0070ba7fdfedeb2048c91eea9c5a5afb30232a3976331",
+      "repository": "https://github.com/virtio-win/kvm-guest-drivers-windows",
+      "revision": "virtio-win-0.1.285-1",
+      "license": "BSD-3-Clause and component-specific licenses"
+    }
+  },
+  "paths": {
+    "qemu": "bin/qemu-system-aarch64",
+    "qemu_img": "bin/qemu-img",
+    "swtpm": "bin/swtpm",
+    "firmware_code": "share/qemu/edk2-aarch64-code.fd",
+    "firmware_vars": "share/qemu/edk2-arm-vars.fd",
+    "extractor": "bin/7zz",
+    "wimlib": "bin/wimlib-imagex",
+    "xorriso": "bin/xorriso",
+    "guest_driver": "share/guest/viogpu3d-arm64x-signed.zip",
+    "virtio_iso": "share/guest/virtio-win-0.1.285.iso",
+    "render_server": "libexec/virgl_render_server",
+    "dxmt_library": "lib/libdxmt-native.dylib"
+  }
+}

@@ -8,6 +8,21 @@ $installedAssetsPath = Join-Path $work 'installed-assets.json'
 $lightweightPendingPath = Join-Path $work 'lightweight-setup.pending'
 $lightweightReportPath = Join-Path $work 'windows-optimization.json'
 $taskName = 'VirtueFinishSetup'
+$macGuest = $false
+$guestProfilePath = Join-Path $PSScriptRoot 'guest-profile.json'
+if (Test-Path -LiteralPath $guestProfilePath -PathType Leaf) {
+    $guestProfile = Get-Content -LiteralPath $guestProfilePath -Raw | ConvertFrom-Json
+    if ($guestProfile.schema_version -ne 1 -or $guestProfile.architecture -ne 'arm64' -or $guestProfile.graphics -ne 'triton-dxmt') {
+        throw 'Unsupported Virtue guest execution profile.'
+    }
+    if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') { throw 'The Mac driver media requires Windows ARM64.' }
+    $macGuest = $true
+}
+$driverArchitecture = if ($macGuest) { 'arm64' } else { 'amd64' }
+# Windows ARM64 uses the published x64 guest agent through Windows emulation,
+# matching UTM's guest-tools installer; the kernel drivers remain native ARM64.
+$agentPackage = 'qemu-ga-x86_64.msi'
+$graphicsName = if ($macGuest) { 'Triton' } else { 'Yttrium' }
 
 function New-WorkSecurity([bool]$directory) {
     $security = if ($directory) { [System.Security.AccessControl.DirectorySecurity]::new() } else { [System.Security.AccessControl.FileSecurity]::new() }
@@ -335,8 +350,8 @@ function Install-Driver([string]$inf, [int]$phase) {
 }
 
 function Install-VirtioPackage([string]$root, [string]$windows, [string]$driver) {
-    $directory = Join-Path $root "$driver\$windows\amd64"
-    if (-not (Test-Path -LiteralPath $directory)) { $directory = Join-Path $root "$driver\w10\amd64" }
+    $directory = Join-Path $root "$driver\$windows\$driverArchitecture"
+    if (-not (Test-Path -LiteralPath $directory)) { $directory = Join-Path $root "$driver\w10\$driverArchitecture" }
     $infs = @(Get-ChildItem -LiteralPath $directory -Filter '*.inf')
     if (-not $infs.Count) { throw "The required $driver driver is missing." }
     foreach ($inf in $infs) { Install-Driver $inf.FullName 1 }
@@ -344,22 +359,39 @@ function Install-VirtioPackage([string]$root, [string]$windows, [string]$driver)
 
 function Install-Virtio {
     $media = @(Get-PSDrive -PSProvider FileSystem | Where-Object {
-        Test-Path -LiteralPath (Join-Path $_.Root 'guest-agent\qemu-ga-x86_64.msi')
+        Test-Path -LiteralPath (Join-Path $_.Root ("guest-agent\" + $agentPackage))
     })
     if ($media.Count -ne 1) { throw 'The required VirtIO installation media is missing or ambiguous.' }
     $root = $media[0].Root
     $windows = if ([Environment]::OSVersion.Version.Build -ge 22000) { 'w11' } else { 'w10' }
     Install-VirtioPackage $root $windows 'vioserial'
     Write-Status 'installing' 'Installing the Windows recovery connection…' 1
-    $agent = Join-Path $root 'guest-agent\qemu-ga-x86_64.msi'
+    $agent = Join-Path $root ("guest-agent\" + $agentPackage)
     Invoke-Installer 'msiexec.exe' @('/i', $agent, '/qn', '/norestart')
     Set-Service -Name 'QEMU-GA' -StartupType Automatic
     Start-Service -Name 'QEMU-GA'
     $service = Get-Service -Name 'QEMU-GA'
     try { $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(30)) }
     finally { $service.Dispose() }
-    foreach ($driver in @('NetKVM', 'viostor', 'vioscsi', 'viorng', 'vioinput')) {
+    $drivers = if ($macGuest) { @('NetKVM', 'viorng', 'vioinput') } else { @('NetKVM', 'viostor', 'vioscsi', 'viorng', 'vioinput') }
+    foreach ($driver in $drivers) {
         Install-VirtioPackage $root $windows $driver
+    }
+}
+
+function Install-Triton {
+    $drivers = Join-Path $work ('Triton-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        Expand-Archive -LiteralPath (Join-Path $work 'TritonDrivers.zip') -DestinationPath $drivers
+        foreach ($certificate in @(Get-ChildItem -LiteralPath $drivers -Recurse -Filter '*.cer')) {
+            Import-DriverCertificate $certificate.FullName
+        }
+        $infs = @(Get-ChildItem -LiteralPath $drivers -Recurse -Filter '*.inf')
+        if (-not $infs.Count) { throw 'The Mac graphics archive contains no driver packages.' }
+        Write-Status 'installing' 'Installing Triton DirectX graphics…' 2
+        foreach ($inf in $infs) { Install-Driver $inf.FullName 2 }
+    } finally {
+        if (Test-Path -LiteralPath $drivers) { Remove-Item -LiteralPath $drivers -Recurse -Force }
     }
 }
 
@@ -614,7 +646,9 @@ try {
         } else {
             Write-Status 'installing' 'Installing Windows integration drivers…' 1
         }
-        foreach ($name in @('Install-VirtueGuest.ps1', 'Collect-VirtueGpuReport.ps1', 'Set-VirtueDisplay.ps1', 'windows-account.json', 'asset-checksums.json', 'YttriumDrivers.zip', 'VulkanRT.exe')) {
+        $setupFiles = @('Install-VirtueGuest.ps1', 'Collect-VirtueGpuReport.ps1', 'Set-VirtueDisplay.ps1', 'windows-account.json', 'asset-checksums.json')
+        $setupFiles += if ($macGuest) { @('guest-profile.json', 'TritonDrivers.zip') } else { @('YttriumDrivers.zip', 'VulkanRT.exe') }
+        foreach ($name in $setupFiles) {
             $source = Join-Path $PSScriptRoot $name
             $destination = Join-Path $work $name
             if ([System.IO.Path]::GetFullPath($source) -ne [System.IO.Path]::GetFullPath($destination)) {
@@ -623,7 +657,9 @@ try {
             Set-Acl -LiteralPath $destination -AclObject (New-WorkSecurity $false)
         }
         $hashes = Get-Content -LiteralPath (Join-Path $work 'asset-checksums.json') -Raw | ConvertFrom-Json
-        foreach ($asset in @(@('YttriumDrivers.zip', $hashes.guest), @('VulkanRT.exe', $hashes.vulkan))) {
+        $checkedAssets = @(@('YttriumDrivers.zip', $hashes.guest), @('VulkanRT.exe', $hashes.vulkan))
+        if ($macGuest) { $checkedAssets = ,@('TritonDrivers.zip', $hashes.guest) }
+        foreach ($asset in $checkedAssets) {
             if ((Get-FileHash -LiteralPath (Join-Path $work $asset[0]) -Algorithm SHA256).Hash -ne $asset[1]) {
                 throw 'A required driver download failed verification.'
             }
@@ -647,19 +683,23 @@ try {
     if ($phase -eq 1) {
         Write-Status 'installing' 'Installing Windows integration drivers…' 1
         Install-Virtio
-        Write-Status 'installing' 'Preparing Yttrium graphics and restarting Windows…' 1
-        if (Confirm-SecureBootUEFI) { throw 'The VM firmware did not apply the required Yttrium configuration.' }
+        Write-Status 'installing' "Preparing $graphicsName graphics and restarting Windows…" 1
+        if (Confirm-SecureBootUEFI) { throw 'The VM firmware did not apply the required guest signing configuration.' }
         Invoke-Installer 'bcdedit.exe' @('/set', 'testsigning', 'on')
         Invoke-Installer 'powercfg.exe' @('/hibernate', 'off')
-        Write-Status 'installing' 'Installing Yttrium graphics after restart…' 2
+        Write-Status 'installing' "Installing $graphicsName graphics after restart…" 2
         Restart-Computer -Force
     } elseif ($phase -eq 2) {
-        Write-Status 'installing' 'Installing Yttrium graphics and the Vulkan runtime…' 2
-        Install-Yttrium
-        Write-Status 'installing' 'Installing the Vulkan runtime…' 2
-        $installer = Start-Process -FilePath (Join-Path $work 'VulkanRT.exe') -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
-        if ($installer.ExitCode -notin @(0, 3010)) { throw 'The Vulkan runtime did not install successfully.' }
-        # Record installed versions only after both installers have succeeded.
+        if ($macGuest) {
+            Install-Triton
+        } else {
+            Write-Status 'installing' 'Installing Yttrium graphics and the Vulkan runtime…' 2
+            Install-Yttrium
+            Write-Status 'installing' 'Installing the Vulkan runtime…' 2
+            $installer = Start-Process -FilePath (Join-Path $work 'VulkanRT.exe') -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
+            if ($installer.ExitCode -notin @(0, 3010)) { throw 'The Vulkan runtime did not install successfully.' }
+        }
+        # Record versions only after all profile-specific installers succeed.
         $hashes = Get-Content -LiteralPath (Join-Path $work 'asset-checksums.json') -Raw | ConvertFrom-Json
         Write-WorkFile ($installedAssetsPath + '.tmp') (@{ guest=$hashes.guest; vulkan=$hashes.vulkan } | ConvertTo-Json)
         Move-Item -LiteralPath ($installedAssetsPath + '.tmp') -Destination $installedAssetsPath -Force

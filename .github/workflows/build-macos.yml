@@ -1,0 +1,101 @@
+name: Build Mac application
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-macos-${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-macos:
+    name: Build Apple Silicon engineering preview
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up native Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: arm64
+
+      - name: Check native runner
+        run: |
+          python - <<'PY'
+          import platform
+          if platform.system() != "Darwin" or platform.machine() != "arm64":
+              raise SystemExit("The Mac build requires a native Apple Silicon runner.")
+          PY
+
+      - name: Cache native runtime and corresponding sources
+        id: runtime-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/virtue-macos-runtime
+            ${{ runner.temp }}/Virtue-macos-runtime-sources.tar.gz
+          key: macos-26-arm64-runtime-${{ hashFiles('resources/macos-runtime.json', 'tools/build_macos_runtime.py', 'tools/build_macos.py') }}
+
+      - name: Install native runtime build tools
+        if: steps.runtime-cache.outputs.cache-hit != 'true'
+        run: |
+          formulas=(cmake ninja meson pkgconf glib pixman libslirp zstd libusb swtpm sevenzip wimlib xorriso)
+          brew install "${formulas[@]}"
+          # Align installed dependencies with the source versions archived for this build.
+          dependencies=()
+          dependency_list="$(brew deps --installed "${formulas[@]}")"
+          while IFS= read -r formula; do
+            [[ -z "$formula" ]] || dependencies+=("$formula")
+          done <<< "$dependency_list"
+          brew upgrade --formula "${formulas[@]}" "${dependencies[@]}"
+          xcodebuild -downloadComponent MetalToolchain
+
+      - name: Build and assemble native runtime
+        if: steps.runtime-cache.outputs.cache-hit != 'true'
+        run: |
+          python tools/build_macos_runtime.py \
+            --output "$RUNNER_TEMP/virtue-macos-runtime" \
+            --work "$RUNNER_TEMP/virtue-runtime-build" \
+            --sources-output "$RUNNER_TEMP/Virtue-macos-runtime-sources.tar.gz"
+
+      - name: Install application and bundle builder
+        run: python -m pip install . "pyinstaller==6.16.0"
+
+      - name: Build native Mac application
+        run: |
+          python tools/build_macos.py \
+            --runtime "$RUNNER_TEMP/virtue-macos-runtime" \
+            --output dist/macos
+
+      - name: Archive application with executable permissions
+        working-directory: dist/macos
+        run: |
+          /usr/bin/ditto -c -k --keepParent Virtue.app Virtue-macos-arm64.zip
+          cp "$RUNNER_TEMP/Virtue-macos-runtime-sources.tar.gz" .
+          /usr/bin/shasum -a 256 Virtue-macos-arm64.zip > Virtue-macos-arm64.zip.sha256
+          /usr/bin/shasum -a 256 Virtue-macos-runtime-sources.tar.gz > Virtue-macos-runtime-sources.tar.gz.sha256
+
+      - name: Upload Mac application and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: virtue-macos-arm64
+          path: |
+            dist/macos/Virtue-macos-arm64.zip
+            dist/macos/Virtue-macos-arm64.zip.sha256
+            dist/macos/Virtue-macos-runtime-sources.tar.gz
+            dist/macos/Virtue-macos-runtime-sources.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14

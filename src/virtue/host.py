@@ -50,6 +50,10 @@ class HostReport:
     versions: dict[str, str] = field(default_factory=dict)
     ready: bool = False
     errors: list[str] = field(default_factory=list)
+    guest_profiles: list[str] = field(default_factory=list)
+    accelerator: str = ""
+    graphics_backend: str = ""
+    runtime_sources: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -66,6 +70,10 @@ def _run(args: list[str], timeout: float = 8) -> tuple[bool, str]:
 
 
 def memory_mib() -> int:
+    if host_platform.system() == "Darwin":
+        ok, output = _run(["/usr/sbin/sysctl", "-n", "hw.memsize"])
+        if ok and output.strip().isdigit():
+            return int(output.strip()) // (1024 * 1024)
     if host_platform.system() == "Linux":
         try:
             text = Path("/proc/meminfo").read_text()
@@ -224,6 +232,9 @@ def venus_kernel_requirements(gpus: list[dict], kernel: str, cpuinfo: str) -> tu
 
 
 def detect_host() -> HostReport:
+    if host_platform.system() == "Darwin":
+        from .macos_host import detect_macos_host
+        return detect_macos_host()
     report = HostReport(memory_mib=memory_mib(), cpus=max(1, os.cpu_count() or 1))
     def add(name: str, ok: bool, detail: str, required: bool = True) -> None:
         report.checks.append(Check(name, bool(ok), required, detail))

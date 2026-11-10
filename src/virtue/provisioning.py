@@ -7,6 +7,7 @@ from pathlib import Path
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
@@ -17,8 +18,17 @@ from .setup import asset_specs, file_digest, run_setup
 from .store import atomic_json
 
 
-def inspect_windows_iso(iso: Path, directory: Path) -> dict:
-    extractor = shutil.which("7zz") or shutil.which("7z")
+def _media_tool(role: str, default: str) -> str:
+    if sys.platform == "darwin":
+        from .macos_runtime import bundled_tool
+        return bundled_tool(role)
+    return default
+
+
+def inspect_windows_iso(iso: Path, directory: Path, *, architecture: str = "amd64") -> dict:
+    if architecture not in ("amd64", "arm64"):
+        raise ValidationError("Unsupported Windows media architecture.")
+    extractor = _media_tool("extractor", shutil.which("7zz") or shutil.which("7z") or "")
     if not extractor:
         raise ValidationError("The Windows media reader is missing. Use Repair setup in the app.")
     if shutil.disk_usage(directory).free < iso.stat().st_size + 2 * 1024 ** 3:
@@ -29,27 +39,32 @@ def inspect_windows_iso(iso: Path, directory: Path) -> dict:
         image = next((path for path in Path(temporary).iterdir() if path.suffix.lower() in {".wim", ".esd"}), None)
         if image is None:
             raise ValidationError("This ISO does not contain a supported Windows installation image.")
-        result = subprocess.run(["wimlib-imagex", "info", str(image), "--xml"],
+        result = subprocess.run([_media_tool("wimlib", "wimlib-imagex"), "info", str(image), "--xml"],
                                 capture_output=True, timeout=120, check=False)
         if result.returncode:
-            raise ValidationError("The Windows image could not be read. Select an intact Windows 10/11 x64 ISO.")
+            raise ValidationError("The Windows image could not be read. Select an intact Windows ISO for this environment.")
         try:
             images = ET.fromstring(result.stdout).findall("IMAGE")
         except ET.ParseError as exc:
             raise ValidationError("The Windows ISO's image metadata is invalid.") from exc
-    candidates = [image for image in images if image.findtext("WINDOWS/ARCH") == "9"]
+    candidates = [image for image in images if image.findtext("WINDOWS/ARCH") == ("12" if architecture == "arm64" else "9")]
     if not candidates:
-        raise ValidationError("Choose a Windows 10/11 x64 ISO. ARM and 32-bit images are unsupported.")
+        raise ValidationError("Choose a Windows 11 ARM64 ISO for this Mac." if architecture == "arm64"
+                              else "Choose a Windows 10/11 x64 ISO. ARM and 32-bit images are unsupported.")
     image = next((image for image in candidates if image.findtext("WINDOWS/EDITIONID") == "Professional"), candidates[0])
     build = int(image.findtext("WINDOWS/VERSION/BUILD", "0"))
     if image.findtext("WINDOWS/VERSION/MAJOR") != "10" or build < 10240:
         raise ValidationError("This ISO is not a supported Windows 10/11 image.")
+    if architecture == "arm64" and build < 22000:
+        raise ValidationError("The native Mac profile requires Windows 11 ARM64.")
     return {"image_index": int(image.attrib["INDEX"]), "windows_version": "11" if build >= 22000 else "10",
             "locale": image.findtext("WINDOWS/LANGUAGES/DEFAULT") or image.findtext("WINDOWS/LANGUAGES/LANGUAGE") or "en-US"}
 
 
 def answer_file(config, image: dict, password: str) -> str:
     template = (support_folder("resources") / "windows-unattend.xml").read_text(encoding="utf-8")
+    if config.execution_profile == "windows-arm64-virt-triton-v1":
+        template = template.replace('processorArchitecture="amd64"', 'processorArchitecture="arm64"')
     values = {"IMAGE_INDEX": str(image["image_index"]), "LOCALE": image["locale"],
               "WINDOWS_SIZE": str(config.disk_gib * 1024 - 260 - 16 - 1024 - 1),
               "COMPUTER_NAME": "VIRTUE-" + config.id[:8].upper(), "PASSWORD": password}
@@ -79,11 +94,16 @@ def _write_setup_media(target: Path, credentials: Path, assets: dict[str, Path],
         shutil.copy2(credentials, files / "windows-account.json")
         for name in ("Install-VirtueGuest.ps1", "Collect-VirtueGpuReport.ps1", "Set-VirtueDisplay.ps1"):
             shutil.copy2(support_folder("guest") / name, files / name)
-        shutil.copy2(assets["guest"], files / "YttriumDrivers.zip")
-        shutil.copy2(assets["vulkan"], files / "VulkanRT.exe")
+        if "triton" in assets:
+            shutil.copy2(assets["triton"], files / "TritonDrivers.zip")
+            (files / "guest-profile.json").write_text(json.dumps({
+                "schema_version": 1, "architecture": "arm64", "graphics": "triton-dxmt"}), encoding="utf-8")
+        else:
+            shutil.copy2(assets["guest"], files / "YttriumDrivers.zip")
+            shutil.copy2(assets["vulkan"], files / "VulkanRT.exe")
         (files / "asset-checksums.json").write_text(json.dumps({key: spec["sha256"] for key, spec in asset_specs().items()}), encoding="utf-8")
         staged_iso = Path(temporary) / "setup.iso"
-        run_setup(["xorriso", "-as", "mkisofs", "-quiet", "-J", "-r", "-V", "VIRTUE_SETUP", "-o", str(staged_iso), str(files)])
+        run_setup([_media_tool("xorriso", "xorriso"), "-as", "mkisofs", "-quiet", "-J", "-r", "-V", "VIRTUE_SETUP", "-o", str(staged_iso), str(files)])
         staged_iso.chmod(0o600)
         staged_iso.replace(target)
 
@@ -100,7 +120,8 @@ def prepare_repair(directory: Path, assets: dict[str, Path], progress=lambda mes
     return target
 
 
-def prepare_windows(config, directory: Path, assets: dict[str, Path], progress=lambda message: None) -> None:
+def prepare_windows(config, directory: Path, assets: dict[str, Path], progress=lambda message: None,
+                    *, image: dict | None = None) -> None:
     if not config.auto_setup or config.installed:
         return
     target = directory / "virtue-setup.iso"
@@ -110,8 +131,10 @@ def prepare_windows(config, directory: Path, assets: dict[str, Path], progress=l
     config.drivers_iso_path = str(assets["virtio"])
     if target.is_file() and credentials.is_file():
         return
-    progress("Reading your Windows ISO and choosing its installation defaults…")
-    image = inspect_windows_iso(Path(config.iso_path), directory)
+    if image is None:
+        progress("Reading your Windows ISO and choosing its installation defaults…")
+        architecture = "arm64" if config.execution_profile == "windows-arm64-virt-triton-v1" else "amd64"
+        image = inspect_windows_iso(Path(config.iso_path), directory, architecture=architecture)
     config.windows_version = image["windows_version"]
     if credentials.is_file():
         password = json.loads(credentials.read_text(encoding="utf-8"))["password"]

@@ -33,6 +33,9 @@ def run_setup(args: list[str], *, timeout: int = 1800) -> str:
 
 
 def asset_specs() -> dict:
+    if sys.platform == "darwin":
+        from .macos_runtime import guest_assets
+        return guest_assets()
     resources = support_folder("resources")
     stack = json.loads((resources / "yttrium-stack.json").read_text(encoding="utf-8"))
     tools = json.loads((resources / "setup-assets.json").read_text(encoding="utf-8"))

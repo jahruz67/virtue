@@ -1,11 +1,29 @@
 # Building and packaging
 
-Pushing a `v*` tag (for example, `v0.1.0`) runs the **Test and package** workflow.
-After its Linux checks succeed, it creates a GitHub prerelease with the
-Linux-built DEB and RPM, their SHA-256 checksums, Python wheel, and source archive attached.
-Update the version in `pyproject.toml` before tagging
-a new version. Rerunning the workflow for the same tag updates its release assets.
-Branch pushes and pull requests upload workflow artifacts without publishing a release.
+Every push to `main` runs **Build and release**. The Linux job runs the existing
+checks and builds the amd64 DEB, x86_64 RPM, Python wheel and source archive. The
+Mac job runs on Apple Silicon, prepares its native runtime automatically, and
+packages `Virtue.app` as `Virtue-macos-arm64.zip`. No runtime upload, workflow
+inputs, repository variables or extra GitHub token are required.
+
+After both jobs succeed, the workflow verifies the package checksums, uploads all
+assets to a draft GitHub prerelease, and publishes it as `build-<commit SHA>`.
+The release also includes the native runtime source archive. Failed builds do
+not publish an incomplete release. Rerunning the same commit updates its assets.
+A local commit triggers GitHub Actions when it is pushed to GitHub.
+
+Pushing a `v*` tag still creates a prerelease under that tag; update the version
+in `pyproject.toml` before tagging a new version. Pull requests and pushes to
+other branches run the Linux checks and upload artifacts without publishing.
+
+The Mac runtime recipe is in `resources/macos-runtime.json`. Its native components
+are built from the recorded upstream revisions, and downloaded guest media is
+verified against its SHA-256 hashes. The runtime and source archive are cached
+until the recipe or builders change. The initial Mac build takes longer because
+it also builds ANGLE, LLVM 15, DXMT, libepoxy, virglrenderer and QEMU. The app is an
+ad-hoc-signed engineering preview for Apple Silicon on macOS 26 or later; Apple
+Developer ID signing and notarization are not configured. The new automated Mac
+build recipe has not been executed or qualified on a Mac in this checkout.
 
 For pip and DEB builds, Python 3.11–3.13, pip, and a virtual environment are required. Qt is pinned to
 PySide6 Essentials 6.8.3 and shiboken6 6.8.3. Guest execution uses distribution
