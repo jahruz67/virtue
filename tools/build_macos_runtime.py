@@ -76,6 +76,8 @@ def build_angle(source: Path, build: Path, minimum: str) -> Path:
     run(["xcodebuild", "archive", "-archivePath", build, "-scheme", "ANGLE",
          "-sdk", "macosx", "-arch", "arm64", "-configuration", "Release",
          "WK_LIBCPP_ASSERTIONS_CFLAGS=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
+         # Newer Clang warns about legacy virtual declarations in this pinned source.
+         "WARNING_CFLAGS=$(inherited) -Wno-error=unnecessary-virtual-specifier",
          "WEBCORE_LIBRARY_DIR=/usr/local/lib", "NORMAL_UMBRELLA_FRAMEWORKS_DIR=",
          "OTHER_LDFLAGS=$(inherited) -Wl,-headerpad_max_install_names",
          "CODE_SIGNING_ALLOWED=NO", f"MACOSX_DEPLOYMENT_TARGET={minimum}"], cwd=angle)
