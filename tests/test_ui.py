@@ -191,7 +191,8 @@ def test_failed_vm_can_retry_while_another_vm_installs(app):
     window.confirm = lambda *_args, **_kwargs: True
     try:
         window.render_vms([installing, failed])
-        retry = next(button for button in window.cards.findChildren(QPushButton) if button.text() == "Retry")
+        retry = window._vm_cards[failed["id"]].retry
+        assert not retry.isHidden()
         assert retry.isEnabled()
         retry.click()
         wait_for_idle(app, window)
