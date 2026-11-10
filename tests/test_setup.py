@@ -258,7 +258,8 @@ def test_retry_repairs_existing_windows_and_preserves_recovery_instructions(tmp_
                               start=lambda config: calls.append("start"), retry_setup=resume,
                               resume=lambda vm_id: calls.append("unpause"),
                               setup_status=lambda vm_id: dict(guest_status))
-    service = VMService(store, backend=backend)
+    # Keep automatic allocations unchanged for this configuration-preservation check.
+    service = VMService(store, backend=backend, host=SimpleNamespace(memory_mib=32768, cpus=8))
     monkeypatch.setattr(service, "prepare_host", lambda progress: {})
     monkeypatch.setattr(provisioning, "prepare_repair", prepare_repair)
     monkeypatch.setattr(provisioning, "prepare_windows", lambda *args: pytest.fail("Windows must not be reinstalled"))
@@ -320,7 +321,7 @@ def test_stopped_repair_revalidates_downloads_and_refreshes_missing_virtio_media
     started = []
     backend = SimpleNamespace(status=lambda vm_id: {"state": "stopped"}, start=started.append,
                               retry_setup=lambda *args, **kwargs: True)
-    service = VMService(store, backend=backend)
+    service = VMService(store, backend=backend, host=SimpleNamespace(memory_mib=12288, cpus=4))
     service._assets = {"guest": tmp_path / "corrupt.zip", "virtio": tmp_path / "removed-virtio.iso"}
     verified = []
     monkeypatch.setattr("virtue.services.sys.platform", "linux")
@@ -346,5 +347,7 @@ def test_stopped_repair_revalidates_downloads_and_refreshes_missing_virtio_media
     assert verified == [True]
     assert len(started) == 1 and started[0].drivers_iso_path == str(refreshed["virtio"])
     assert store.load(config.id).drivers_iso_path == str(refreshed["virtio"])
+    assert started[0].cpus == store.load(config.id).cpus == 3
+    assert started[0].memory_mib == store.load(config.id).memory_mib == 8192
     assert (directory / "disk.qcow2").read_bytes() == b"existing Windows"
     assert credentials.read_bytes() == b'{"username":"Virtue","password":"keep"}'
