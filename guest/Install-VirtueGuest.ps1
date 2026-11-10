@@ -443,7 +443,17 @@ try {
     Initialize-WorkDirectory
     $workReady = $true
     if ($Resume -or ($Repair -and (Test-Path -LiteralPath $statusPath))) {
-        $phase = (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).phase
+        try {
+            $savedStatus = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            if ($null -eq $savedStatus -or $null -eq $savedStatus.phase) {
+                throw 'The saved Windows setup status does not contain a phase.'
+            }
+            $phase = [int]$savedStatus.phase
+        } catch {
+            if (-not $Repair -or $Resume) { throw }
+            $phase = if (Test-Path -LiteralPath $installedAssetsPath -PathType Leaf) { 3 } else { 1 }
+            Write-Warning "The saved setup status is invalid. Resuming from phase $phase based on the installed component record."
+        }
     }
     if ($phase -notin @(1, 2, 3)) { throw 'The saved Windows setup phase is invalid.' }
     if (-not $Resume) {
